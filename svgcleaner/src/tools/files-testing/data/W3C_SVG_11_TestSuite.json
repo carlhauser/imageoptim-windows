@@ -1,0 +1,167 @@
+{
+    "custom_ae": [
+        {
+            "name": "painting-control-04-f.svg",
+            "valid_ae": 18941
+        },
+        {
+            "name": "struct-image-12-b.svg",
+            "valid_ae": 504
+        },
+        {
+            "name": "painting-marker-03-f.svg",
+            "valid_ae": 752
+        },
+        {
+            "name": "linking-uri-03-t.svg",
+            "valid_ae": 212
+        },
+        {
+            "name": "filters-conv-05-f.svg",
+            "valid_ae": 640
+        },
+        {
+            "name": "struct-image-03-t.svg",
+            "valid_ae": 462
+        },
+        {
+            "name": "filters-conv-04-f.svg",
+            "valid_ae": 301
+        },
+        {
+            "name": "pservers-pattern-01-b.svg",
+            "valid_ae": 215
+        },
+        {
+            "name": "text-ws-02-t.svg",
+            "valid_ae": 810
+        },
+        {
+            "name": "painting-marker-05-f.svg",
+            "valid_ae": 6365
+        },
+        {
+            "name": "color-prop-05-t.svg",
+            "valid_ae": 25600
+        },
+        {
+            "name": "masking-path-02-b.svg",
+            "valid_ae": 279
+        },
+        {
+            "name": "painting-stroke-10-t.svg",
+            "valid_ae": 10387
+        },
+        {
+            "name": "text-path-01-b.svg",
+            "valid_ae": 552
+        },
+        {
+            "name": "pservers-grad-13-b.svg",
+            "valid_ae": 2679
+        },
+        {
+            "name": "text-ws-01-t.svg",
+            "valid_ae": 746
+        }
+    ],
+    "ignore": [
+        {
+            "info": "invalid attribute processing 'fill=\"red !important\"'",
+            "name": "styling-pres-01-t.svg"
+        },
+        {
+            "info": "unsupported 'system' colors",
+            "name": "color-prop-04-t.svg"
+        },
+        {
+            "info": "investigate",
+            "name": "pservers-grad-20-b.svg"
+        },
+        {
+            "info": "investigate",
+            "name": "types-dom-04-b.svg"
+        },
+        {
+            "info": "investigate",
+            "name": "text-deco-01-b.svg"
+        },
+        {
+            "info": "investigate",
+            "name": "pservers-grad-17-b.svg"
+        },
+        {
+            "info": "investigate",
+            "name": "filters-displace-01-f.svg"
+        },
+        {
+            "info": "investigate",
+            "name": "types-dom-svgtransformable-01-f.svg"
+        },
+        {
+            "info": "investigate",
+            "name": "types-dom-01-b.svg"
+        },
+        {
+            "info": "investigate",
+            "name": "text-ws-03-t.svg"
+        },
+        {
+            "info": "parsed with correct error, should be in should_fail list",
+            "name": "struct-use-12-f.svg"
+        },
+        {
+            "info": "numerical Unicode references unsupported",
+            "name": "coords-transformattr-01-f.svg"
+        },
+        {
+            "info": "external xlink unsupported, --remove-unreferenced-ids breaks it",
+            "name": "struct-use-05-b.svg"
+        },
+        {
+            "info": "custom namespaces are not supported",
+            "name": "struct-frag-05-t.svg"
+        },
+        {
+            "info": "transform processing breaks text aliasing",
+            "name": "text-text-11-t.svg"
+        },
+        {
+            "info": "cursor is not supported",
+            "name": "interact-cursor-01-f.svg"
+        },
+        {
+            "info": "images with animations always produce different results",
+            "name": "animate-elem-37-t.svg"
+        },
+        {
+            "info": "images with animations always produce different results",
+            "name": "animate-elem-33-t.svg"
+        },
+        {
+            "info": "images with animations always produce different results",
+            "name": "animate-elem-40-t.svg"
+        },
+        {
+            "info": "images with animations always produce different results",
+            "name": "animate-elem-35-t.svg"
+        },
+        {
+            "info": "images with animations always produce different results",
+            "name": "animate-elem-82-t.svg"
+        },
+        {
+            "info": "images with animations always produce different results",
+            "name": "animate-elem-36-t.svg"
+        },
+        {
+            "info": "no viewBox, width or height",
+            "name": "struct-frag-01-t.svg"
+        },
+        {
+            "info": "no viewBox, width or height",
+            "name": "struct-frag-04-t.svg"
+        }
+    ],
+    "min_valid_ae": 200
+}

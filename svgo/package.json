@@ -1,0 +1,27 @@
+{
+  "name": "imageoptim-svgo-integration",
+  "version": "1.0.0",
+  "description": "Internal glue",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pornel/ImageOptim.git"
+  },
+  "author": "Kornel Lesi\u0144ski <kornel@geekhood.net> (https://kornel.ski/)",
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/pornel/ImageOptim/issues"
+  },
+  "homepage": "https://github.com/pornel/ImageOptim#readme",
+  "dependencies": {
+    "svgo": "^3.3.5"
+  },
+  "devDependencies": {
+    "json-loader": "^0.5.7",
+    "webpack": "^5",
+    "webpack-cli": "^5"
+  }
+}

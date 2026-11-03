@@ -1,0 +1,60 @@
+## Compiling via Rust/Cargo
+
+The old `configure && make` method is no longer supported.
+
+### Prerequisites
+
+Install Rust 1.60 or later: https://rustup.rs
+
+On Windows also install msys-git and Visual C++ Build Tools
+with Windows 8/10/11 SDK enabled, and reboot.
+
+### Building
+
+Get the code by cloning *recursively*:
+
+    # Unix version
+    git clone --recursive https://github.com/kornelski/pngquant.git
+
+    # Windows version
+    git clone -b msvc --recursive https://github.com/kornelski/pngquant.git
+
+And then build:
+
+    cd pngquant
+    cargo build --release
+
+This will create executable in `target/release/pngquant`(`.exe`).
+
+You can build with additional features:
+
+    cargo build --release --features=lcms2
+
+The features are:
+
+ * `lcms2` — compile with support for color profiles via Little CMS.
+ * `lcms2-static` — same, but link statically.
+ * `cocoa` — compile with support for color profiles via macOS Cocoa.
+
+## Compilation with Cocoa image reader
+
+macOS version can use Cocoa to read images. This adds support for color profiles
+and other image formats as input. However, it also disables support for preserving PNG metadata.
+
+    cargo build --release --features=cocoa
+
+## Compilation with Little CMS 2
+
+Little CMS library is used by default.
+
+It's linked dynamically if `pkg-config` is working (e.g. install `liblcms2-dev`).
+Otherwise uses static build as a fallback.
+
+Set `export LCMS2_STATIC=1` or build `--features=lcms2-static` to force static linking.
+
+## Compilation of `libimagequant_sys.a` only
+
+If you want to use pngquant's conversion algorithm without loading/saving PNG
+files, then you can run `cargo build --release` in the `lib/` directory.
+
+The imagequant library doesn't need libpng nor zlib.

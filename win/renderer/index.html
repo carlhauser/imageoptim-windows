@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+    <title>ImageOptim</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header class="toolbar">
+        <div class="toolbar-group">
+            <button id="add-files" type="button">Add Files</button>
+            <button id="add-folder" type="button">Add Folder</button>
+        </div>
+        <div class="toolbar-group">
+            <button id="again" type="button" title="Optimize everything again with the current settings">Again</button>
+            <button id="stop" type="button" disabled>Stop</button>
+            <button id="clear" type="button">Clear</button>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <button id="toggle-settings" type="button" class="icon-button" aria-expanded="false">Settings</button>
+    </header>
+
+    <main>
+        <table id="file-table">
+            <thead>
+                <tr>
+                    <th class="col-name">Name</th>
+                    <th class="col-size">Size</th>
+                    <th class="col-savings">Savings</th>
+                    <th class="col-tool">Best tool</th>
+                </tr>
+            </thead>
+            <tbody id="file-rows"></tbody>
+        </table>
+
+        <div id="empty-state">
+            <p class="empty-title">Drop images here</p>
+            <p class="empty-hint">PNG, JPEG, GIF and SVG files, or whole folders.<br>
+               Files are optimized and overwritten in place.</p>
+        </div>
+
+        <aside id="settings-panel" hidden>
+            <h2>Optimizers</h2>
+            <label><input type="checkbox" data-setting="OptiPngEnabled"> OxiPNG</label>
+            <label><input type="checkbox" data-setting="ZopfliEnabled"> Zopfli</label>
+            <label><input type="checkbox" data-setting="AdvPngEnabled"> AdvPNG</label>
+            <label><input type="checkbox" data-setting="PngCrush2Enabled"> Pngcrush</label>
+            <label><input type="checkbox" data-setting="JpegTranEnabled"> MozJPEG (jpegtran)</label>
+            <label><input type="checkbox" data-setting="JpegOptimEnabled"> JpegOptim</label>
+            <label><input type="checkbox" data-setting="GuetzliEnabled"> Guetzli <span class="note">slow, uses GBs of RAM</span></label>
+            <label><input type="checkbox" data-setting="GifsicleEnabled"> Gifsicle</label>
+            <label><input type="checkbox" data-setting="SvgoEnabled"> SVGO</label>
+            <label><input type="checkbox" data-setting="SvgcleanerEnabled"> Svgcleaner</label>
+
+            <h2>Quality</h2>
+            <label><input type="checkbox" data-setting="LossyEnabled"> Enable lossy minification</label>
+            <div class="slider">
+                <span>PNG quality</span>
+                <input type="range" min="30" max="100" step="1" data-setting="PngMinQuality">
+                <output data-output="PngMinQuality"></output>
+            </div>
+            <div class="slider">
+                <span>JPEG quality</span>
+                <input type="range" min="30" max="100" step="1" data-setting="JpegOptimMaxQuality">
+                <output data-output="JpegOptimMaxQuality"></output>
+            </div>
+            <div class="slider">
+                <span>GIF quality</span>
+                <input type="range" min="30" max="100" step="1" data-setting="GifQuality">
+                <output data-output="GifQuality"></output>
+            </div>
+
+            <h2>General</h2>
+            <label><input type="checkbox" data-setting="PngOutRemoveChunks"> Strip metadata (PNG)</label>
+            <label><input type="checkbox" data-setting="JpegTranStripAll"> Strip metadata (JPEG)</label>
+            <label><input type="checkbox" data-setting="PreserveDates"> Preserve file dates</label>
+            <div class="slider">
+                <span>Files at once</span>
+                <input type="range" min="1" max="16" step="1" data-setting="RunConcurrentFiles">
+                <output data-output="RunConcurrentFiles"></output>
+            </div>
+            <div class="slider">
+                <span>Effort level</span>
+                <input type="range" min="1" max="7" step="1" data-setting="AdvPngLevel">
+                <output data-output="AdvPngLevel"></output>
+            </div>
+
+            <h2>Installed tools</h2>
+            <ul id="tool-list"></ul>
+            <p class="bin-dir" id="bin-dir"></p>
+
+            <button id="reset-settings" type="button">Restore defaults</button>
+        </aside>
+    </main>
+
+    <footer class="status-bar">
+        <span id="status-files">No files</span>
+        <span class="toolbar-spacer"></span>
+        <span id="status-savings"></span>
+    </footer>
+
+    <div id="drop-overlay" hidden><span>Drop to optimize</span></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

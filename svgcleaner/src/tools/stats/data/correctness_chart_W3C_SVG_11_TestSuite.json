@@ -1,0 +1,27 @@
+{
+    "title": "Broken files in W3C SVG 1.1 TestSuite",
+    "items_font": {
+        "family": "Arial",
+        "size": 12
+    },
+    "items": [
+        {
+            "name": "svgcleaner 0.9.3",
+            "value": 3
+        },
+        {
+            "name": "svgo 1.0.3",
+            "value": 53
+        },
+        {
+            "name": "scour 0.36",
+            "value": 51
+        }
+    ],
+    "hor_axis": {
+        "title": "Files",
+        "width": 500,
+        "max_value": 525,
+        "ticks": [0, 100, 200, 300, 400, 525]
+    }
+}

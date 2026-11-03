@@ -1,0 +1,54 @@
+{
+  "name": "imageoptim-windows",
+  "productName": "ImageOptim",
+  "version": "1.0.0",
+  "description": "Windows front-end for the ImageOptim lossless image optimizers",
+  "license": "GPL-3.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist:win": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.imageoptim.windows",
+    "productName": "ImageOptim",
+    "copyright": "ImageOptim contributors",
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*",
+      "renderer/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": ".",
+        "filter": ["**/*", "!bin/.gitkeep"]
+      }
+    ],
+    "fileAssociations": [
+      { "ext": "png", "name": "PNG image", "role": "Editor" },
+      { "ext": "jpg", "name": "JPEG image", "role": "Editor" },
+      { "ext": "jpeg", "name": "JPEG image", "role": "Editor" },
+      { "ext": "gif", "name": "GIF image", "role": "Editor" },
+      { "ext": "svg", "name": "SVG image", "role": "Editor" }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "zip", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "ImageOptim"
+    }
+  }
+}

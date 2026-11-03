@@ -1,0 +1,9 @@
+[package]
+name = "libtest"
+version = "0.1.0"
+authors = ["Evgeniy Reizner <razrfalcon@gmail.com>"]
+license = "MIT"
+
+[dependencies]
+walkdir = "1"
+rust-crypto = "0.2"

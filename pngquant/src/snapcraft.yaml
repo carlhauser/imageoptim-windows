@@ -1,0 +1,31 @@
+name: pngquant
+version: 3.0.1
+summary: pngquant
+description: |
+  Lossy PNG compressor — pngquant command based
+  on libimagequant library https://pngquant.org
+
+base: core20
+confinement: strict
+
+apps:
+  pngquant:
+    command: bin/pngquant
+    plugs:
+    - home
+
+parts:
+  pngquant:
+    source-type: git
+    source: https://github.com/kornelski/pngquant.git
+    source-tag: 3.0.1
+    plugin: rust
+    build-packages:
+      - gcc
+      - libpng-dev
+      - zlib1g-dev
+      - liblcms2-dev
+    stage-packages:
+      - libpng16-16
+      - zlib1g
+      - liblcms2-2

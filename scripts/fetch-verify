@@ -1,0 +1,42 @@
+#!/bin/bash
+#
+# Fetch a build dependency over HTTPS and refuse to use it unless its SHA-256
+# matches. Downloads land next to the component that needs them, never in a
+# shared world-writable directory where another process could plant them.
+#
+# Usage: fetch-verify <url> <dest-file> <sha256>
+
+set -euo pipefail
+
+url="$1"
+dest="$2"
+want="$3"
+
+checksum() {
+    shasum -a 256 "$1" | cut -d' ' -f1
+}
+
+if [ -f "$dest" ]; then
+    if [ "$(checksum "$dest")" = "$want" ]; then
+        exit 0
+    fi
+    echo "warning: $dest does not match its expected checksum; re-downloading" >&2
+    rm -f "$dest"
+fi
+
+tmp="$dest.part.$$"
+trap 'rm -f "$tmp"' EXIT
+
+# --proto/--proto-redir pin the whole redirect chain to https, so a mirror
+# cannot downgrade the transfer to cleartext
+curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$tmp" "$url"
+
+have="$(checksum "$tmp")"
+if [ "$have" != "$want" ]; then
+    echo "error: checksum mismatch for $url" >&2
+    echo "error:   expected $want" >&2
+    echo "error:   actual   $have" >&2
+    exit 1
+fi
+
+mv "$tmp" "$dest"

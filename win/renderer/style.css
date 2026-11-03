@@ -1,0 +1,250 @@
+:root {
+    --bg: #1e1e1e;
+    --bg-raised: #272727;
+    --bg-hover: #323232;
+    --border: #3a3a3a;
+    --text: #e8e8e8;
+    --text-dim: #9a9a9a;
+    --accent: #3b9c4d;
+    --accent-dim: #2a6f38;
+    --danger: #d05050;
+    --radius: 4px;
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg: #f4f4f4;
+        --bg-raised: #ffffff;
+        --bg-hover: #ececec;
+        --border: #d4d4d4;
+        --text: #1c1c1c;
+        --text-dim: #6a6a6a;
+        --accent: #2a8f3c;
+        --accent-dim: #1f7030;
+    }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    user-select: none;
+}
+
+/* ------------------------------------------------------------------ toolbar */
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+
+.toolbar-group { display: flex; gap: 4px; }
+.toolbar-spacer { flex: 1 1 auto; }
+
+button {
+    font: inherit;
+    color: var(--text);
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 11px;
+    cursor: pointer;
+}
+
+button:hover:not(:disabled) { border-color: var(--text-dim); }
+button:active:not(:disabled) { background: var(--border); }
+button:disabled { opacity: 0.45; cursor: default; }
+
+/* --------------------------------------------------------------- file table */
+
+main {
+    position: relative;
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+}
+
+#file-table {
+    flex: 1 1 auto;
+    border-collapse: collapse;
+    align-self: flex-start;
+    width: 100%;
+    display: block;
+    overflow-y: auto;
+    height: 100%;
+}
+
+#file-table thead,
+#file-table tbody,
+#file-table tr { display: table; width: 100%; table-layout: fixed; }
+
+#file-table thead {
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 1;
+}
+
+#file-table tbody { display: block; }
+
+th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-dim);
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+}
+
+td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.col-name { width: 46%; }
+.col-size { width: 16%; }
+.col-savings { width: 16%; }
+.col-tool { width: 22%; }
+
+tbody tr:hover { background: var(--bg-hover); }
+tbody tr.selected { background: var(--accent-dim); }
+
+.savings { color: var(--accent); font-variant-numeric: tabular-nums; }
+.savings.none { color: var(--text-dim); }
+.size { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.tool { color: var(--text-dim); }
+/* Two classes, to outrank .savings.none on rows that failed */
+.savings.error,
+.error { color: var(--danger); }
+
+/* A thin progress strip behind the row while its optimizers run */
+tr.running .col-name-cell {
+    background-image: linear-gradient(to right, var(--accent-dim) var(--progress, 0%), transparent var(--progress, 0%));
+    background-repeat: no-repeat;
+    background-size: 100% 2px;
+    background-position: bottom left;
+}
+
+/* -------------------------------------------------------------- empty state */
+
+#empty-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    pointer-events: none;
+    color: var(--text-dim);
+    text-align: center;
+}
+
+#empty-state.hidden { display: none; }
+.empty-title { font-size: 16px; color: var(--text); margin: 0; }
+.empty-hint { margin: 0; }
+
+/* ----------------------------------------------------------------- settings */
+
+#settings-panel {
+    flex: 0 0 290px;
+    overflow-y: auto;
+    padding: 12px 14px 20px;
+    background: var(--bg-raised);
+    border-left: 1px solid var(--border);
+}
+
+#settings-panel h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin: 16px 0 6px;
+}
+
+#settings-panel h2:first-child { margin-top: 0; }
+
+#settings-panel label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 2px 0;
+    cursor: pointer;
+}
+
+.note { color: var(--text-dim); font-size: 11px; }
+
+.slider {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 4px 8px;
+    padding: 4px 0;
+}
+
+.slider span { color: var(--text-dim); }
+.slider input { grid-column: 1 / 2; width: 100%; }
+.slider output { font-variant-numeric: tabular-nums; }
+
+#tool-list { list-style: none; margin: 0; padding: 0; }
+#tool-list li { display: flex; justify-content: space-between; color: var(--text-dim); }
+#tool-list li.missing { color: var(--danger); }
+
+.bin-dir {
+    color: var(--text-dim);
+    font-size: 11px;
+    word-break: break-all;
+    margin: 8px 0 14px;
+    user-select: text;
+}
+
+/* --------------------------------------------------------------- status bar */
+
+.status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 10px;
+    background: var(--bg-raised);
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+}
+
+#status-savings { color: var(--accent); }
+
+/* ------------------------------------------------------------- drop overlay */
+
+/* An id selector outranks the browser's [hidden] rule, so restate it here */
+#drop-overlay[hidden] { display: none; }
+
+#drop-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(59, 156, 77, 0.16);
+    border: 2px dashed var(--accent);
+    font-size: 17px;
+    pointer-events: none;
+}

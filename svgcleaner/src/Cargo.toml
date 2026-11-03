@@ -1,0 +1,42 @@
+[package]
+name = "svgcleaner"
+version = "0.9.6"
+authors = ["Evgeniy Reizner <razrfalcon@gmail.com>"]
+keywords = ["svg", "cleaner", "optimizer"]
+license = "GPL-2.0"
+description = "svgcleaner could help you to clean up your SVG files from the unnecessary data."
+documentation = "https://github.com/RazrFalcon/svgcleaner/blob/master/docs/svgcleaner.adoc"
+repository = "https://github.com/RazrFalcon/svgcleaner"
+readme = "README.rst"
+categories = ["multimedia::images"]
+exclude = ["docs/**", "tools/**"]
+
+[badges]
+travis-ci = { repository = "RazrFalcon/svgcleaner" }
+
+[lib]
+name = "svgcleaner"
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+doc = false
+name = "svgcleaner"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "2", default-features = false, optional = true }
+error-chain = { version = "0.11", default-features = false }
+# fern 0.5.9 added chrono and we don't need it
+fern = { version = "=0.5.8", default-features = false }
+log = "0.4"
+svgdom = "0.10.5"
+
+[features]
+default = ["cli-parsing"]
+cli-parsing = ["clap"]
+
+# Makes it 5-10% faster, but very slow to compile.
+# Also makes an executable ~30% smaller.
+[profile.release]
+lto = true

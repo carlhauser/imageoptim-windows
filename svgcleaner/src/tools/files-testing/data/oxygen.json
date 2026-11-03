@@ -1,0 +1,303 @@
+{
+    "custom_ae": [
+        {
+            "name": "actions/small/32x32/taxes-finances.svg",
+            "valid_ae": 5016
+        },
+        {
+            "name": "actions/small/48x48/view-loan-asset.svg",
+            "valid_ae": 4705
+        },
+        {
+            "name": "actions/small/48x48/view-loan.svg",
+            "valid_ae": 4075
+        },
+        {
+            "name": "actions/small/48x48/view-bank-account-savings.svg",
+            "valid_ae": 4360
+        },
+        {
+            "name": "actions/small/48x48/taxes-finances.svg",
+            "valid_ae": 5685
+        },
+        {
+            "name": "actions/small/48x48/view-investment.svg",
+            "valid_ae": 4982
+        },
+        {
+            "name": "devices/small/16x16/network-wireless.svg",
+            "valid_ae": 7727
+        },
+        {
+            "name": "mimetypes/small/48x48/application-vnd.oasis.opendocument.spreadsheet-template.svg",
+            "valid_ae": 4802
+        },
+        {
+            "name": "mimetypes/small/48x48/application-vnd.sun.xml.calc.template.svg",
+            "valid_ae": 4802
+        },
+        {
+            "name": "mimetypes/small/48x48/application-vnd.ms-excel.svg",
+            "valid_ae": 5209
+        },
+        {
+            "name": "devices/input-tablet.svg",
+            "valid_ae": 4533
+        },
+        {
+            "name": "categories/applications-other.svg",
+            "valid_ae": 5572
+        },
+        {
+            "name": "mimetypes/small/64x64/text-x-hex.svg",
+            "valid_ae": 162529
+        },
+        {
+            "name": "mimetypes/small/64x64/application-x-gzpostscript.svg",
+            "valid_ae": 31360
+        },
+        {
+            "name": "mimetypes/small/32x32/uri-rtspu.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/uri-mmsu.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/audio-midi.svg",
+            "valid_ae": 204915
+        },
+        {
+            "name": "mimetypes/small/32x32/audio-vn.rn-realmedia.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/video-x-generic.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/application-vnd.rn-realmedia.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/uri-pnm.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/application-x-shockwave-flash.svg",
+            "valid_ae": 225460
+        },
+        {
+            "name": "mimetypes/small/32x32/uri-mmst.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/audio-vnd.rn-realvideo.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/uri-mms.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/uri-rtspt.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/application-x-mplayer2.svg",
+            "valid_ae": 225028
+        },
+        {
+            "name": "mimetypes/small/32x32/audio-prs.sid.svg",
+            "valid_ae": 204915
+        },
+        {
+            "name": "mimetypes/small/48x48/text-x-katefilelist.svg",
+            "valid_ae": 151235
+        },
+        {
+            "name": "mimetypes/small/48x48/text-x-cmake.svg",
+            "valid_ae": 151236
+        },
+        {
+            "name": "mimetypes/small/48x48/text-x-copying.svg",
+            "valid_ae": 151236
+        },
+        {
+            "name": "mimetypes/small/48x48/text-x-install.svg",
+            "valid_ae": 151236
+        },
+        {
+            "name": "mimetypes/small/48x48/application-x-gzpostscript.svg",
+            "valid_ae": 170181
+        },
+        {
+            "name": "mimetypes/small/48x48/image-svg+xml-compressed.svg",
+            "valid_ae": 170179
+        },
+        {
+            "name": "actions/small/48x48/view-bank-account.svg",
+            "valid_ae": 5412
+        },
+        {
+            "name": "emotes/face-uncertain.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/face-surprise.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/face-wink.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/face-smile-big.svg",
+            "valid_ae": 13393
+        },
+        {
+            "name": "emotes/face-sad.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/face-plain.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/16x16/face-uncertain.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/16x16/face-smile-big.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/16x16/face-sad.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/16x16/face-kiss.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/16x16/face-angel.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/16x16/face-raspberry.svg",
+            "valid_ae": 13187
+        },
+        {
+            "name": "emotes/small/16x16/face-laugh.svg",
+            "valid_ae": 13452
+        },
+        {
+            "name": "emotes/small/22x22/face-uncertain.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/22x22/face-smile-big.svg",
+            "valid_ae": 13833
+        },
+        {
+            "name": "emotes/small/22x22/face-sad.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/22x22/face-kiss.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/22x22/face-angel.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/small/22x22/face-raspberry.svg",
+            "valid_ae": 13356
+        },
+        {
+            "name": "emotes/small/22x22/face-laugh.svg",
+            "valid_ae": 13510
+        },
+        {
+            "name": "emotes/face-smile.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/face-kiss.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/face-angel.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/face-embarrassed.svg",
+            "valid_ae": 14450
+        },
+        {
+            "name": "emotes/face-raspberry.svg",
+            "valid_ae": 13921
+        },
+        {
+            "name": "emotes/face-laugh.svg",
+            "valid_ae": 12892
+        },
+        {
+            "name": "actions/small/48x48/mail-encrypted-full.svg",
+            "valid_ae": 4958
+        },
+        {
+            "name": "actions/small/48x48/mail-encrypted.svg",
+            "valid_ae": 5023
+        },
+        {
+            "name": "apps/picmi.svg",
+            "valid_ae": 63120
+        },
+        {
+            "name": "mimetypes/small/64x64/x-media-podcast.svg",
+            "valid_ae": 24995
+        },
+        {
+            "name": "actions/games-config-board.svg",
+            "valid_ae": 7674
+        },
+        {
+            "name": "actions/small/22x22/view-calendar-month.svg",
+            "valid_ae": 4106
+        },
+        {
+            "name": "actions/small/48x48/view-financial-payment-mode.svg",
+            "valid_ae": 4032
+        },
+        {
+            "name": "mimetypes/text-x-katefilelist.svg",
+            "valid_ae": 7727
+        },
+        {
+            "name": "mimetypes/text-x-copying.svg",
+            "valid_ae": 5956
+        },
+        {
+            "name": "mimetypes/application-rtf.svg",
+            "valid_ae": 5791
+        },
+        {
+            "name": "mimetypes/application-x-kvtml.svg",
+            "valid_ae": 11505
+        },
+        {
+            "name": "mimetypes/text-enriched.svg",
+            "valid_ae": 5791
+        }
+    ],
+    "ignore": [
+        {
+            "info": "magic bug",
+            "name": "devices/phone.svg"
+        }
+    ],
+    "min_valid_ae": 4000
+}

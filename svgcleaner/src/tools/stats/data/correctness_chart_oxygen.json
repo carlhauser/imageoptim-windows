@@ -1,0 +1,27 @@
+{
+    "title": "Broken files in Oxygen icon theme",
+    "items_font": {
+        "family": "Arial",
+        "size": 12
+    },
+    "items": [
+        {
+            "name": "svgcleaner 0.9.3",
+            "value": 0
+        },
+        {
+            "name": "svgo 1.0.3",
+            "value": 29
+        },
+        {
+            "name": "scour 0.36",
+            "value": 6
+        }
+    ],
+    "hor_axis": {
+        "title": "Files",
+        "width": 500,
+        "max_value": 4941,
+        "ticks": [0, 1000, 2000, 3000, 4000, 4941]
+    }
+}

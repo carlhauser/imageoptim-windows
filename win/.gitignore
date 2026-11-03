@@ -1,0 +1,5 @@
+node_modules/
+dist/
+resources/bin/*
+!resources/bin/.gitkeep
+resources/svgo.js

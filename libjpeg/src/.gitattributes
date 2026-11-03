@@ -1,0 +1,6 @@
+/.travis.yml export-ignore
+/appveyor.yml export-ignore
+/ci export-ignore
+/.gitattributes export-ignore
+*.ppm binary
+/ChangeLog.md conflict-marker-size=8

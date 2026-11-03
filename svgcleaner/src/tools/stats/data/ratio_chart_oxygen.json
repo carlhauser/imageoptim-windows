@@ -1,0 +1,31 @@
+{
+    "title": "Cleaning ratio in Oxygen icon theme",
+    "items_font": {
+        "family": "Arial",
+        "size": 12
+    },
+    "items": [
+        {
+            "name": "svgcleaner 0.9.3",
+            "value": 61.34
+        },
+        {
+            "name": "svgcleaner 0.9.0",
+            "value": 61.25
+        },
+        {
+            "name": "svgo 1.0.3",
+            "value": 53.33
+        },
+        {
+            "name": "scour 0.36",
+            "value": 50.72
+        }
+    ],
+    "hor_axis": {
+        "title": "Removed data",
+        "suffix": "%",
+        "width": 500,
+        "max_value": 100
+    }
+}
