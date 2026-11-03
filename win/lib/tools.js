@@ -92,6 +92,14 @@ const zopflipng = {
         // timelimitForLevel: in CommandWorker.m
         let timelimit = Math.min(8 + ctx.level * 13, 10 + Math.floor(ctx.input.byteSize / 1024));
 
+        // Zopfli is by far the most expensive step and its last seconds buy
+        // almost nothing, so cap the budget unless the user asks for the
+        // uncapped original.
+        const budget = ctx.settings.ThoroughPng ? 0 : Number(ctx.settings.ZopfliMaxSeconds);
+        if (budget > 0) {
+            timelimit = Math.min(timelimit, budget);
+        }
+
         let actualIterations = iterations;
         let filters = '--filters=0pme';
 
@@ -101,7 +109,7 @@ const zopflipng = {
         }
 
         if (ctx.alternativeStrategy) {
-            timelimit *= 1.4;
+            timelimit = budget > 0 ? timelimit : timelimit * 1.4;
             filters = '--filters=bp';
         } else {
             timelimit *= 0.8;

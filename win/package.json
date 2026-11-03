@@ -28,27 +28,63 @@
       {
         "from": "resources",
         "to": ".",
-        "filter": ["**/*", "!bin/.gitkeep"]
+        "filter": [
+          "**/*",
+          "!bin/.gitkeep"
+        ]
       }
     ],
     "fileAssociations": [
-      { "ext": "png", "name": "PNG image", "role": "Editor" },
-      { "ext": "jpg", "name": "JPEG image", "role": "Editor" },
-      { "ext": "jpeg", "name": "JPEG image", "role": "Editor" },
-      { "ext": "gif", "name": "GIF image", "role": "Editor" },
-      { "ext": "svg", "name": "SVG image", "role": "Editor" }
+      {
+        "ext": "png",
+        "name": "PNG image",
+        "role": "Editor"
+      },
+      {
+        "ext": "jpg",
+        "name": "JPEG image",
+        "role": "Editor"
+      },
+      {
+        "ext": "jpeg",
+        "name": "JPEG image",
+        "role": "Editor"
+      },
+      {
+        "ext": "gif",
+        "name": "GIF image",
+        "role": "Editor"
+      },
+      {
+        "ext": "svg",
+        "name": "SVG image",
+        "role": "Editor"
+      }
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "zip", "arch": ["x64"] }
-      ]
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "ImageOptim"
+      "shortcutName": "ImageOptim",
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico"
     }
   }
 }

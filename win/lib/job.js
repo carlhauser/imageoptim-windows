@@ -134,7 +134,10 @@ class Job extends EventEmitter {
                 plan.push({ tool: tools.byId('advpng') });
             }
             if (settings.ZopfliEnabled) {
-                plan.push({ tool: tools.byId('zopflipng'), alternativeStrategy: hasBeenRunBefore });
+                const skipAbove = settings.ThoroughPng ? 0 : Number(settings.ZopfliSkipAboveKB) * 1024;
+                if (!skipAbove || this.bestSize <= skipAbove) {
+                    plan.push({ tool: tools.byId('zopflipng'), alternativeStrategy: hasBeenRunBefore });
+                }
             }
         } else if (this.type === JPEG) {
             if (!lossyConverted && !hasBeenRunBefore && tools.byId('guetzli').enabled(settings)) {

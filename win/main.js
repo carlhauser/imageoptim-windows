@@ -20,6 +20,14 @@ function resolveBinDir() {
     return path.join(__dirname, 'resources', 'bin');
 }
 
+// The window and taskbar icon. Electron only picks up an icon compiled into
+// the .exe for the file itself; this is what the running window shows.
+function resolveIcon() {
+    const dir = app.isPackaged ? process.resourcesPath : path.join(__dirname, 'resources');
+    const icon = path.join(dir, 'icon.png');
+    return fs.existsSync(icon) ? icon : undefined;
+}
+
 let mainWindow = null;
 let settings = null;
 let queue = null;
@@ -32,6 +40,7 @@ function createWindow() {
         minHeight: 320,
         backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#f4f4f4',
         title: 'ImageOptim',
+        icon: resolveIcon(),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,

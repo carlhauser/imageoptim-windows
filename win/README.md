@@ -75,6 +75,40 @@ and one at a time, so the rest see their output. The lossless ones then run in
 parallel against that result, and the smallest output wins. A file that no tool
 improved is left exactly as it was.
 
+## Performance
+
+Zopfli dominates the cost of a PNG run and, on anything photographic, loses to
+OxiPNG anyway. Measured on this machine, one 2 MB PNG:
+
+| optimizer | result | time |
+| --------- | ------ | ---- |
+| OxiPNG `-o4` | 1,354,628 B | 3.2s |
+| Zopfli, 1 iteration | 1,428,213 B | 42.6s |
+| Zopfli, 10 iterations | 1,389,170 B | 55.7s |
+
+OxiPNG won at every size tested from 177 KB to 2 MB, between twenty and sixty
+times faster. Capping Zopfli's `--timelimit` does not help, because it only
+checks the clock between iterations and a single iteration on a large image
+already overruns any sensible budget.
+
+So `ZopfliSkipAboveKB` (default 256) skips Zopfli once a file is bigger than
+that, which is ImageOptim's own threshold for a "large" PNG. Below it Zopfli is
+cheap and does sometimes win, so it still runs. Over thirty photos:
+
+| | time | saved |
+| --- | --- | --- |
+| default | 9.8s | 28.27% |
+| `ThoroughPng: true` | 127.8s | 28.27% |
+
+Thirteen times faster for 714 bytes out of 8.7 MB. `ThoroughPng` restores the
+macOS behaviour exactly: no size threshold and no time budget.
+
+`MaxWorkers` caps how many optimizer processes run at once across every file.
+Without a global cap the two limits multiply - files in flight times optimizers
+per file - and oversubscribe the machine. Measured over thirty photos on a
+16-core machine: 2 workers 27.0s, 4 workers 15.0s, 8 workers 12.0s, 16 workers
+12.6s. The default is the core count capped at eight.
+
 ## Differences from the macOS app
 
 * **No PNGOUT.** It is a closed-source binary that ImageOptim downloads
@@ -113,6 +147,7 @@ win/
   main.js               window, menu, IPC, queue wiring
   preload.js            the renderer's only bridge to the main process
   lib/filetype.js       header sniffing and the small/large thresholds
+  lib/semaphore.js      the global cap on concurrent optimizer processes
   lib/settings.js       defaults ported from imageoptim/defaults.plist
   lib/run.js            child process plumbing and output parsing
   lib/tools.js          one entry per optimizer, with its exact arguments
@@ -120,6 +155,7 @@ win/
   lib/queue.js          folder scanning, concurrency, totals
   renderer/             the window itself
   resources/bin/        the built executables (created by the build script)
+  resources/icon.ico    app icon, converted from imageoptim/ImageOptim.icns
 ```
 
 ## Development without Windows binaries

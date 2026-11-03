@@ -26,6 +26,20 @@ const DEFAULTS = {
     PngCrush2Enabled: false,
     PngOutRemoveChunks: true,
     ZopfliEnabled: true,
+
+    // Above this size, measured on the file as it stands, Zopfli is skipped.
+    // Measured on photographic PNGs from 177 KB to 2 MB, oxipng produced a
+    // SMALLER file than Zopfli every time, 20 to 60 times faster - on a 2 MB
+    // PNG, 1,354,628 bytes in 3.2s against Zopfli's 1,389,170 in 55.7s. Zopfli
+    // still earns its place on small flat graphics, so it keeps those. 0 runs
+    // it on everything, which is what the macOS app does.
+    ZopfliSkipAboveKB: 256,
+
+    // Seconds Zopfli may spend on one image. ImageOptim's own formula allows up
+    // to 8 + level * 13 seconds, which on a multi-megabyte PNG means nearly a
+    // minute per file - and measured against photographic PNGs that minute buys
+    // about 0.01% extra. 0 means no cap, i.e. the original behaviour.
+    ZopfliMaxSeconds: 5,
     GifsicleEnabled: true,
     SvgoEnabled: true,
     SvgcleanerEnabled: true,
@@ -37,7 +51,14 @@ const DEFAULTS = {
     // macOS app sizes its single worker queue by processor count; a fixed 4
     // left most of a modern machine idle while Zopfli - which is far and away
     // the slowest step - ran one file at a time.
-    MaxWorkers: Math.max(1, os.cpus().length),
+    // Measured on a 16-core machine over 30 photos: 2 workers 27.0s, 4 workers
+    // 15.0s, 8 workers 12.0s, 16 workers 12.6s. Past eight the optimizers just
+    // contend, so take the core count but stop at eight.
+    MaxWorkers: Math.max(2, Math.min(8, os.cpus().length)),
+
+    // Run Zopfli on everything, with no time budget, the way the macOS app
+    // does. Much slower for a fraction of a percent; off by default.
+    ThoroughPng: false,
 };
 
 class Settings {

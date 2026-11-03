@@ -76,10 +76,11 @@
             <label><input type="checkbox" data-setting="PngOutRemoveChunks"> Strip metadata (PNG)</label>
             <label><input type="checkbox" data-setting="JpegTranStripAll"> Strip metadata (JPEG)</label>
             <label><input type="checkbox" data-setting="PreserveDates"> Preserve file dates</label>
+            <label><input type="checkbox" data-setting="ThoroughPng"> Thorough PNG compression <span class="note">much slower, ~0.01% smaller</span></label>
             <div class="slider">
-                <span>Files at once</span>
-                <input type="range" min="1" max="16" step="1" data-setting="RunConcurrentFiles">
-                <output data-output="RunConcurrentFiles"></output>
+                <span>Optimizers at once</span>
+                <input type="range" min="1" max="16" step="1" data-setting="MaxWorkers">
+                <output data-output="MaxWorkers"></output>
             </div>
             <div class="slider">
                 <span>Effort level</span>
