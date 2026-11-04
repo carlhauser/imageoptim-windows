@@ -114,6 +114,16 @@ per file - and oversubscribe the machine. Measured over thirty photos on a
 16-core machine: 2 workers 27.0s, 4 workers 15.0s, 8 workers 12.0s, 16 workers
 12.6s. The default is the core count capped at eight.
 
+## Runtime
+
+Electron 45.2.2 (Node 24, Chromium 156). Electron patches only its newest three
+majors, so the version pinned here is kept current rather than left to age — the
+previous pin, 33.2.0, was two years old and carried unpatched Chromium issues.
+
+Verified by running the real preload, renderer and `lib/` under Electron 45 on
+macOS: the contextBridge surface, `nativeImage` decoding for the Guetzli path, a
+full optimize run, and the rendered rows and status bar.
+
 ## Saving safely
 
 The optimized result is staged beside the original and renamed onto it, which is
