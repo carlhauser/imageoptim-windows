@@ -18,15 +18,15 @@ like the macOS app, and WebP and AVIF as well: lossless WebP is recompressed
 losslessly with cwebp and EXIF and XMP are stripped, and with lossy
 minification on, lossy WebP and AVIF are re-encoded (cwebp, avifenc) when that
 saves at least 5%. One bar runs along the top: the
-**Queue** and **Done** tabs on the left, the commands as icons on the right.
-Files waiting or being optimized are under Queue; each one moves to Done as it
-finishes, and the window switches to Done when the queue runs out.
+**Queue**, **Done** and **Skipped** tabs on the left, the commands as icons on
+the right. Files waiting or being optimized are under Queue; each one moves to
+Done as it finishes, and the window switches to Done when the queue runs out.
 
 While files are queued, a bar at the bottom of the window and the taskbar
 button fill up, and the status bar shows how many are done and about how long
 is left. The time is learned from the files as they finish. Files an earlier
 run already optimized, in this session or a past one, are recognised by their
-content and go straight to Done.
+content and go straight to Skipped, left as they are.
 
 ![Two large PNGs still running, each row's line over its track, and the bar and time left along the bottom](docs/screenshots/progress-light.png)
 
@@ -93,7 +93,7 @@ with MinGW-w64 under MSYS2, and `win/` packages the app around them. See
 plans and the Zopfli size threshold were derived.
 
 The screenshots above were taken on Windows 11 from a real run, and were
-themselves optimized by this build: 36.4% smaller, Zopfli winning all five.
+themselves optimized by this build: 36.6% smaller, Zopfli winning all five.
 
 ---
 

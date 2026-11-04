@@ -13,14 +13,18 @@
          The commands are icons only; aria-label names each one, and title
          gives it a tooltip with its shortcut from the menu. -->
     <header class="toolbar">
-        <!-- Files waiting or being optimized, and files that are finished
-             (optimized, already optimal, failed, reverted or stopped). -->
+        <!-- Files waiting or being optimized; files that are finished
+             (optimized, already optimal, failed, reverted or stopped); and
+             files an earlier run had already optimized, left alone. -->
         <div class="tabs list-tabs" role="tablist" aria-label="Files">
             <button type="button" role="tab" id="view-queue" data-view="queue" aria-controls="file-table" aria-selected="true" title="Files waiting or being optimized">
                 <span class="icon i-queue" aria-hidden="true"></span><span class="tab-label">Queue</span><span class="count" id="count-queue">0</span>
             </button>
             <button type="button" role="tab" id="view-done" data-view="done" aria-controls="file-table" aria-selected="false" tabindex="-1" title="Finished files">
                 <span class="icon i-done" aria-hidden="true"></span><span class="tab-label">Done</span><span class="count" id="count-done">0</span>
+            </button>
+            <button type="button" role="tab" id="view-skipped" data-view="skipped" aria-controls="file-table" aria-selected="false" tabindex="-1" title="Files an earlier run already optimized, left as they are">
+                <span class="icon i-skipped" aria-hidden="true"></span><span class="tab-label">Skipped</span><span class="count" id="count-skipped">0</span>
             </button>
         </div>
         <div class="toolbar-spacer"></div>

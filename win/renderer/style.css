@@ -150,6 +150,7 @@ body {
 .i-theme-dark { --icon: url(icons/theme-dark.svg); }
 .i-queue { --icon: url(icons/state-queued.svg); }
 .i-done { --icon: url(icons/state-unchanged.svg); }
+.i-skipped { --icon: url(icons/skipped.svg); }
 
 /* ------------------------------------------------------------------ buttons */
 
@@ -245,8 +246,9 @@ button.command:not(.primary):hover:not(:disabled) .icon { color: var(--text); }
 #toggle-settings[aria-expanded="true"] .icon { color: var(--accent); }
 
 /* Narrow, the tabs keep their icons and counts; the names stay readable to
-   screen readers, and each tab has a tooltip. */
-@media (max-width: 560px) {
+   screen readers, and each tab has a tooltip. With their names the three tabs
+   and the commands need about 625 px. */
+@media (max-width: 640px) {
     .list-tabs .tab-label {
         position: absolute;
         width: 1px;
@@ -257,6 +259,17 @@ button.command:not(.primary):hover:not(:disabled) .icon { color: var(--text); }
     }
 
     .toolbar-divider { margin: 0 3px; }
+}
+
+/* Narrower still, down to the 420 px minimum: everything packs a little
+   closer. The buttons stay as tall as before, so the hit area stays 32 x 36. */
+@media (max-width: 480px) {
+    .toolbar { gap: 2px; padding-inline: 6px; }
+    .toolbar-spacer { min-width: 4px; }
+    /* .toolbar first, to outrank the tabs' own padding further down */
+    .toolbar .tabs.list-tabs [role="tab"] { padding: 0 6px 0 8px; }
+    button.command { width: 32px; }
+    .toolbar-divider { margin: 0 2px; }
 }
 
 /* --------------------------------------------------------------- file table */
@@ -288,15 +301,18 @@ main {
     display: flex;
 }
 
-/* Queue / Done: each view shows only its own rows (app.js keeps the counts).
-   #file-table in each selector, to outrank `#file-table tr { display: table }`. */
+/* Queue / Done / Skipped: each view shows only its own rows (app.js keeps
+   the counts). #file-table in each selector, to outrank
+   `#file-table tr { display: table }`. */
 .list-pane[data-view="queue"] #file-table tbody tr:not([data-state="queued"]):not([data-state="running"]),
 .list-pane[data-view="done"] #file-table tbody tr[data-state="queued"],
-.list-pane[data-view="done"] #file-table tbody tr[data-state="running"] {
+.list-pane[data-view="done"] #file-table tbody tr[data-state="running"],
+.list-pane[data-view="done"] #file-table tbody tr[data-state="skipped"],
+.list-pane[data-view="skipped"] #file-table tbody tr:not([data-state="skipped"]) {
     display: none;
 }
 
-/* Queue / Done, at the left of the toolbar. .tabs.list-tabs, to outrank the
+/* Queue / Done / Skipped, at the left of the toolbar. .tabs.list-tabs, to outrank the
    settings tabs' rules further down. */
 .tabs.list-tabs {
     flex: none;
@@ -445,8 +461,8 @@ tbody tr.running {
 }
 
 tr[data-state="done"] .state { --icon: url(icons/state-done.svg); color: var(--accent); }
-tr[data-state="unchanged"] .state,
-tr[data-state="skipped"] .state { --icon: url(icons/state-unchanged.svg); }
+tr[data-state="unchanged"] .state { --icon: url(icons/state-unchanged.svg); }
+tr[data-state="skipped"] .state { --icon: url(icons/skipped.svg); }
 tr[data-state="queued"] .state { --icon: url(icons/state-queued.svg); }
 tr[data-state="reverted"] .state { --icon: url(icons/state-reverted.svg); color: var(--text-dim); }
 tr[data-state="stopped"] .state { --icon: url(icons/stop.svg); }

@@ -89,8 +89,9 @@ function removeRow(id) {
 // --------------------------------------------------------- queue / done views
 
 // Queue holds what is waiting or being optimized; Done everything finished,
-// whether optimized, already optimal, failed, reverted or stopped. Which rows
-// show is decided by style.css from the pane's data-view and each row's
+// whether optimized, already optimal, failed, reverted or stopped; Skipped the
+// files an earlier run had already optimized, which were left alone. Which
+// rows show is decided by style.css from the pane's data-view and each row's
 // data-state; this keeps the counts and the empty-state text right.
 const listPaneEl = document.querySelector('.list-pane');
 const viewTabs = [...document.querySelectorAll('.list-tabs [role="tab"]')];
@@ -98,7 +99,8 @@ const emptyTitleEl = emptyEl.querySelector('.empty-title');
 const emptyHintEl = emptyEl.querySelector('.empty-hint');
 const emptyText = { title: emptyTitleEl.textContent, hint: emptyHintEl.innerHTML };
 let lastQueued = 0;
-let lastRows = 0;
+let lastDone = 0;
+let lastSkipped = 0;
 let keepOriginals = false; // Settings → Options → Keep originals
 
 const keptHint = 'PNG, JPEG, GIF, SVG, WebP and AVIF files, or whole folders.<br>'
@@ -125,23 +127,34 @@ function showView(view, focus = false) {
 
 function updateViews() {
     let queued = 0;
-    for (const tr of rows.values()) if (isQueued(tr.dataset.state)) queued += 1;
-    const done = rows.size - queued;
+    let skipped = 0;
+    for (const tr of rows.values()) {
+        if (isQueued(tr.dataset.state)) queued += 1;
+        else if (tr.dataset.state === 'skipped') skipped += 1;
+    }
+    const done = rows.size - queued - skipped;
     document.getElementById('count-queue').textContent = queued;
     document.getElementById('count-done').textContent = done;
+    document.getElementById('count-skipped').textContent = skipped;
 
     // Follow the work: new files bring the queue to the front, and when the
-    // last one finishes the results take its place.
-    // Files added that all go straight to Done - every one already optimized
-    // - show there too, rather than leaving an empty Queue in front.
+    // last one finishes the results take its place - under Done, or under
+    // Skipped if every file turned out to be optimized already. Files added
+    // that all go straight to Skipped show there too, rather than leaving an
+    // empty Queue in front.
     const view = listPaneEl.dataset.view;
-    const grew = rows.size > lastRows;
-    lastRows = rows.size;
-    if (queued > 0 && lastQueued === 0 && view !== 'queue') { lastQueued = queued; showView('queue'); return; }
-    if (queued === 0 && (lastQueued > 0 || grew) && done > 0 && view !== 'done') { lastQueued = 0; showView('done'); return; }
+    const doneGrew = done > lastDone;
+    const skippedGrew = skipped > lastSkipped;
+    lastDone = done;
+    lastSkipped = skipped;
+    let follow = null;
+    if (queued > 0 && lastQueued === 0) follow = 'queue';
+    else if (queued === 0 && lastQueued > 0) follow = done > 0 ? 'done' : skipped > 0 ? 'skipped' : null;
+    else if (queued === 0 && skippedGrew && !doneGrew) follow = 'skipped';
     lastQueued = queued;
+    if (follow && follow !== view) { showView(follow); return; }
 
-    const shown = view === 'queue' ? queued : done;
+    const shown = { queue: queued, done, skipped }[view];
     emptyEl.classList.toggle('hidden', shown > 0);
     if (rows.size === 0) {
         emptyTitleEl.textContent = emptyText.title;
@@ -149,6 +162,9 @@ function updateViews() {
     } else if (view === 'queue') {
         emptyTitleEl.textContent = 'Nothing in the queue';
         emptyHintEl.textContent = 'Finished files are under Done. Drop more images to optimize them.';
+    } else if (view === 'skipped') {
+        emptyTitleEl.textContent = 'Nothing skipped';
+        emptyHintEl.textContent = 'Files an earlier run already optimized come here instead of being optimized again.';
     } else {
         emptyTitleEl.textContent = 'Nothing finished yet';
         emptyHintEl.textContent = 'Files move here as soon as their optimization completes.';

@@ -366,12 +366,15 @@ fixed lightnesses, so text keeps its contrast whichever colour is picked. The
 Theme setting there sets Electron's `nativeTheme.themeSource`, which drives
 `prefers-color-scheme` in the page and the native controls alike.
 
-One bar runs along the top: the list's Queue and Done tabs on the left, and the
-commands on the right as icons, each with an `aria-label` and a tooltip that
-names its menu shortcut. The layout follows the window down to its 420 px
-minimum: the tabs drop their names and keep their icons and counts, the list
-drops Best tool and then Size through container queries on its own width, and
-below 720 px the settings panel overlays the list instead of squeezing it.
+One bar runs along the top: the list's Queue, Done and Skipped tabs on the
+left, and the commands on the right as icons, each with an `aria-label` and a
+tooltip that names its menu shortcut. The layout follows the window down to its
+420 px minimum:
+- below 640 px the tabs drop their names and keep their icons and counts;
+- below 480 px the bar packs a little closer;
+- the list drops Best tool and then Size through container queries on its own
+  width;
+- below 720 px the settings panel overlays the list instead of squeezing it.
 
 ## Saving safely
 
@@ -440,14 +443,23 @@ original's dates, and stays there. `lib/originals.js` holds the rules:
 
 Drop files or folders onto the window, or use the first two buttons on the right
 of the toolbar (Add files, Add a folder). Folders are scanned recursively for
-PNG, JPEG, GIF, SVG, WebP and AVIF. A file that an earlier run already optimized - in this
-session or a past one - goes straight to Done as "already optimized".
+PNG, JPEG, GIF, SVG, WebP and AVIF.
 
-The list has two tabs. **Queue** holds files waiting or being optimized;
-**Done** holds the finished ones - optimized, already optimal, failed, reverted
-or stopped. Adding files brings Queue to the front, and the window switches to
-Done when the last file in the queue finishes. Switching tabs clears the
-selection, so Delete and Ctrl+Z never act on rows out of sight.
+The list has three tabs:
+- **Queue** holds files waiting or being optimized.
+- **Done** holds the finished ones: optimized, already optimal, failed,
+  reverted or stopped.
+- **Skipped** holds files an earlier run had already optimized, in this
+  session or a past one, which were left as they are.
+
+The window follows the work:
+- Adding files brings Queue to the front.
+- When the last file in the queue finishes, the window switches to Done, or to
+  Skipped if every file was already optimized.
+- Files added that all go straight to Skipped show there.
+
+Switching tabs clears the selection, so Delete and Ctrl+Z never act on rows out
+of sight.
 
 While files are queued, a bar along the top of the status bar and the
 taskbar button fill up, and the status bar says how many files are done and
