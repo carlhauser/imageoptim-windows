@@ -53,12 +53,17 @@ jobs:
 
       # Wanted even on a partial build: the summary says which tools failed, and
       # the app runs with whatever did build.
+      # svgo.js is not an executable and so does not live in bin/. Uploading only
+      # bin/ left it out of the packaging job, and the resulting app had no SVGO
+      # at all - silently, since a missing optimizer is simply skipped.
       - name: Upload the built optimizers
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: optimizers-win-x64
-          path: win/resources/bin/
+          path: |
+            win/resources/bin/
+            win/resources/svgo.js
           if-no-files-found: warn
 
   package:
@@ -84,7 +89,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: optimizers-win-x64
-          path: win/resources/bin/
+          path: win/resources/
 
       - name: Report which optimizers arrived
         shell: pwsh
@@ -93,6 +98,11 @@ jobs:
             Get-ChildItem win/resources/bin | ForEach-Object { Write-Host ("  {0,-16} {1:N0} bytes" -f $_.Name, $_.Length) }
           } else {
             Write-Host '  none - packaging an app with no optimizers'
+          }
+          if (Test-Path win/resources/svgo.js) {
+            Write-Host ("  {0,-16} {1:N0} bytes" -f 'svgo.js', (Get-Item win/resources/svgo.js).Length)
+          } else {
+            throw 'svgo.js did not reach the packaging job; the app would have no SVGO'
           }
 
       - name: Install dependencies
