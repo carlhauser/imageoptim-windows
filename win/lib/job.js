@@ -9,11 +9,53 @@ const tools = require('./tools');
 const { detectType, isSmall, PNG, JPEG, GIF, SVG } = require('./filetype');
 
 let tempCounter = 0;
+let tempRoot = null;
+
+// Everything scratch lives in one directory we own, so a crash leaves a single
+// identifiable folder and startup can reclaim it. Writing loose files straight
+// into %TEMP% meant orphans nothing ever cleaned up.
+function tempDir() {
+    if (!tempRoot) {
+        tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ImageOptim-'));
+    }
+    return tempRoot;
+}
 
 function tempPath(toolId) {
     tempCounter += 1;
     const unique = `${process.pid.toString(16)}.${tempCounter.toString(16)}`;
-    return path.join(os.tmpdir(), `ImageOptim.${toolId}.${unique}.temp`);
+    return path.join(tempDir(), `${toolId}.${unique}.temp`);
+}
+
+// Removes our own scratch directory, plus any left behind by a previous run that
+// was killed. Called at startup and again on quit.
+function sweepTempDirs() {
+    let entries = [];
+    try {
+        entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true });
+    } catch (err) {
+        return;
+    }
+    for (const entry of entries) {
+        if (!entry.isDirectory() || !entry.name.startsWith('ImageOptim-')) continue;
+        const dir = path.join(os.tmpdir(), entry.name);
+        if (dir === tempRoot) continue; // ours, still in use
+        try {
+            fs.rmSync(dir, { recursive: true, force: true });
+        } catch (err) {
+            /* another instance may still own it */
+        }
+    }
+}
+
+function releaseTempDir() {
+    if (!tempRoot) return;
+    try {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    } catch (err) {
+        /* best effort on the way out */
+    }
+    tempRoot = null;
 }
 
 function unlinkQuietly(filePath) {
@@ -43,6 +85,8 @@ class Job extends EventEmitter {
         this.bestTool = null;
         this.backupPath = null;    // pre-optimization copy, for Revert
         this.lastSavedSize = 0;    // size we last wrote, to spot outside edits
+        this.lastSavedMtimeMs = 0; // and when, to spot a same-size edit
+        this.isRunning = false;
         this.runCount = 0;
         this.state = 'queued';
         this.error = null;
@@ -181,7 +225,18 @@ class Job extends EventEmitter {
         const { tool } = step;
         const resolved = this.resolveTool(tool);
         if (!resolved) {
-            return null; // optimizer not installed; the macOS app skips it too
+            // Not installed. Still counts as finished, or the progress fraction
+            // never reaches 1 and the row looks stuck.
+            this.toolsDone += 1;
+            this.emit('change', this.toJSON());
+            return null;
+        }
+
+        // Tools do real work before they spawn anything - a full file copy, or a
+        // PNG decode for Guetzli - so without this Stop still burns that work.
+        if (signal.aborted) {
+            this.toolsDone += 1;
+            return null;
         }
 
         const temp = tempPath(tool.id);
@@ -218,12 +273,26 @@ class Job extends EventEmitter {
     }
 
     async run(settings, signal) {
+        // Two concurrent runs would share bestPath and bestSize and race in
+        // save(). The queue also guards this, but a Job is the thing being
+        // corrupted, so it refuses here too.
+        if (this.isRunning) return;
+        this.isRunning = true;
+        try {
+            await this.doRun(settings, signal);
+        } finally {
+            this.isRunning = false;
+        }
+    }
+
+    async doRun(settings, signal) {
         this.setState('running');
 
         let header;
         let currentSize;
+        let stat;
         try {
-            const stat = fs.statSync(this.filePath);
+            stat = fs.statSync(this.filePath);
             const fd = fs.openSync(this.filePath, 'r');
             header = Buffer.alloc(Math.min(16, stat.size));
             fs.readSync(fd, header, 0, header.length, 0);
@@ -232,6 +301,10 @@ class Job extends EventEmitter {
             this.mode = stat.mode;
             this.mtime = stat.mtime;
             this.atime = stat.atime;
+            // What the optimizers are about to read. Checked again before the
+            // result is written back.
+            this.startSize = stat.size;
+            this.startMtimeMs = stat.mtimeMs;
         } catch (err) {
             this.setState('error', 'Can’t open the file');
             return;
@@ -248,7 +321,9 @@ class Job extends EventEmitter {
         // re-exported it - starts over, and then the old backup no longer belongs
         // to it. Ports the initialInput/hasChangedSinceLastSave handling in
         // doEnqueueWorkersInCPUQueue.
-        const changedExternally = Boolean(this.lastSavedSize) && this.lastSavedSize !== currentSize;
+        const changedExternally = Boolean(this.lastSavedSize)
+            && (this.lastSavedSize !== currentSize
+                || (this.lastSavedMtimeMs && this.lastSavedMtimeMs !== stat.mtimeMs));
         if (!this.runCount || changedExternally) {
             this.originalSize = currentSize;
             if (changedExternally) {
@@ -277,6 +352,14 @@ class Job extends EventEmitter {
 
         if (!this.toolsTotal) {
             this.setState('error', 'All necessary tools have been disabled in Preferences');
+            return;
+        }
+
+        // Counting planned tools is not enough: with an empty bin directory every
+        // file used to report done at 0% with no error anywhere.
+        const installed = [...runFirst, ...runLater].filter((step) => this.resolveTool(step.tool));
+        if (!installed.length) {
+            this.setState('error', 'No optimizer for this format is installed');
             return;
         }
 
@@ -329,48 +412,120 @@ class Job extends EventEmitter {
         }
     }
 
+    // Writes `source` over `this.filePath` without ever leaving it half-written.
+    // The replacement is staged beside the target - same directory, so the same
+    // volume - and renamed on top, which is atomic on NTFS. A crash therefore
+    // leaves either the old file or the new one, never a truncated image.
+    replaceOriginal(source, settings) {
+        const dir = path.dirname(this.filePath);
+        const staging = path.join(dir, `.imageoptim-${process.pid.toString(16)}-${(tempCounter += 1).toString(16)}.tmp`);
+
+        try {
+            fs.copyFileSync(source, staging);
+            // Apply metadata to the staged copy, so the file is complete in every
+            // respect at the instant it becomes the original.
+            if (settings.PreservePermissions) {
+                try { fs.chmodSync(staging, this.mode); } catch (err) { /* best effort */ }
+            }
+            if (settings.PreserveDates) {
+                try { fs.utimesSync(staging, this.atime, this.mtime); } catch (err) { /* best effort */ }
+            }
+            fs.renameSync(staging, this.filePath);
+            return;
+        } catch (err) {
+            unlinkQuietly(staging);
+            // Some network and FUSE volumes refuse a rename over an open file.
+            // Fall back to a direct copy, which is not atomic - acceptable only
+            // because a backup of the original already exists by this point.
+            if (!this.backupPath) throw err;
+            fs.copyFileSync(source, this.filePath);
+            if (settings.PreservePermissions) {
+                try { fs.chmodSync(this.filePath, this.mode); } catch (e) { /* best effort */ }
+            }
+            if (settings.PreserveDates) {
+                try { fs.utimesSync(this.filePath, this.atime, this.mtime); } catch (e) { /* best effort */ }
+            }
+        }
+    }
+
+    // Refuses to write if the file changed while the optimizers were running.
+    // Otherwise the result - derived from the bytes read at the start - would
+    // silently destroy whatever another program wrote in the meantime, and the
+    // backup would be of the pre-edit content too, so Revert could not undo it.
+    assertUnchangedSinceStart() {
+        let now;
+        try {
+            now = fs.statSync(this.filePath);
+        } catch (err) {
+            throw new Error('the file is no longer there');
+        }
+        if (now.size !== this.startSize || now.mtimeMs !== this.startMtimeMs) {
+            throw new Error('the file changed on disk while it was being optimized');
+        }
+    }
+
     // Replaces the original with the best result, keeping a backup so the result
     // can be reverted from the UI.
     save(settings) {
+        this.assertUnchangedSinceStart();
+
         if (!this.backupPath) {
             this.backupPath = tempPath('backup');
             fs.copyFileSync(this.filePath, this.backupPath);
         }
 
-        fs.copyFileSync(this.bestPath, this.filePath);
-
-        if (settings.PreservePermissions) {
-            // On Windows the meaningful permissions live in the ACL, which
-            // copyFileSync leaves on the existing file; this keeps the Unix mode
-            // bits in step as well, which matters on a network share.
-            try { fs.chmodSync(this.filePath, this.mode); } catch (err) { /* best effort */ }
-        }
-        if (settings.PreserveDates) {
-            try { fs.utimesSync(this.filePath, this.atime, this.mtime); } catch (err) { /* best effort */ }
-        }
+        this.replaceOriginal(this.bestPath, settings);
 
         unlinkQuietly(this.bestPath);
         this.bestPath = null;
-        this.lastSavedSize = this.bestSize;
+
+        // Read back what is actually on disk rather than trusting the temp file's
+        // measurements, since this is what the next run compares against.
+        try {
+            const saved = fs.statSync(this.filePath);
+            this.lastSavedSize = saved.size;
+            this.lastSavedMtimeMs = saved.mtimeMs;
+        } catch (err) {
+            this.lastSavedSize = this.bestSize;
+            this.lastSavedMtimeMs = 0;
+        }
     }
 
-    revert() {
-        if (!this.canRevert) return false;
-        fs.copyFileSync(this.backupPath, this.filePath);
+    revert(settings = {}) {
+        if (!this.canRevert) return { ok: false, reason: 'there is no backup of this file' };
+
+        // Reverting over a file someone edited after we saved would destroy their
+        // change, and the backup predates it, so there would be no way back.
+        try {
+            const now = fs.statSync(this.filePath);
+            if (this.lastSavedSize && (now.size !== this.lastSavedSize
+                || (this.lastSavedMtimeMs && now.mtimeMs !== this.lastSavedMtimeMs))) {
+                return { ok: false, reason: 'the file was changed by something else after it was optimized' };
+            }
+        } catch (err) {
+            return { ok: false, reason: 'the file is no longer there' };
+        }
+
+        this.replaceOriginal(this.backupPath, settings);
         unlinkQuietly(this.backupPath);
         this.backupPath = null;
         this.bestSize = this.originalSize;
         this.lastSavedSize = 0;
+        this.lastSavedMtimeMs = 0;
         this.runCount = 0;
         this.bestTool = null;
         this.setState('reverted');
-        return true;
+        return { ok: true };
     }
 
+    // Called when the job leaves the list. The backup is a full copy of the
+    // original, so leaving it behind means one orphan per optimized file.
     cleanup() {
         unlinkQuietly(this.bestPath);
         this.bestPath = null;
+        unlinkQuietly(this.backupPath);
+        this.backupPath = null;
     }
 }
 
-module.exports = { Job, isSmall };
+module.exports = { Job, isSmall, sweepTempDirs, releaseTempDir };

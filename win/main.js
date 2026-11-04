@@ -6,6 +6,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme } = requir
 
 const { Settings } = require('./lib/settings');
 const { Queue } = require('./lib/queue');
+const { sweepTempDirs, releaseTempDir } = require('./lib/job');
 
 // Where the optimizer executables live. Packaged builds get them from
 // resources\bin; a checkout uses win\resources\bin. IMAGEOPTIM_BIN overrides
@@ -26,6 +27,21 @@ function resolveIcon() {
     const dir = app.isPackaged ? process.resourcesPath : path.join(__dirname, 'resources');
     const icon = path.join(dir, 'icon.png');
     return fs.existsSync(icon) ? icon : undefined;
+}
+
+// Paths passed on the command line, which is how Windows hands over files when
+// you open an image with the app or drop one on its icon.
+function filePathsFromArgv(argv) {
+    return argv
+        .slice(1)
+        .filter((arg) => !arg.startsWith('-') && arg !== '.')
+        .filter((arg) => {
+            try {
+                return fs.statSync(arg).isFile() || fs.statSync(arg).isDirectory();
+            } catch (err) {
+                return false;
+            }
+        });
 }
 
 let mainWindow = null;
@@ -142,7 +158,18 @@ function registerIpc() {
     ipcMain.handle('job:reveal', (event, id) => {
         if (fs.existsSync(id)) shell.showItemInFolder(id);
     });
-    ipcMain.handle('job:revert', (event, id) => queue.revert(id));
+    ipcMain.handle('job:revert', (event, id) => {
+        const result = queue.revert(id);
+        if (!result.ok && mainWindow) {
+            dialog.showMessageBox(mainWindow, {
+                type: 'warning',
+                message: 'That file was not restored',
+                detail: `${path.basename(id)} could not be put back because ${result.reason}.`,
+                buttons: ['OK'],
+            });
+        }
+        return result;
+    });
 
     ipcMain.handle('settings:get', () => settings.all());
     ipcMain.handle('settings:set', (event, patch) => settings.update(patch || {}));
@@ -155,7 +182,10 @@ function registerIpc() {
 }
 
 if (!app.requestSingleInstanceLock()) {
+    // Without the return the rest of this file still runs in the losing
+    // instance, which goes on to build its own Settings and Queue.
     app.quit();
+    return;
 }
 
 app.whenReady().then(() => {
@@ -171,6 +201,20 @@ app.whenReady().then(() => {
     registerIpc();
     buildMenu();
     createWindow();
+
+    // Reclaim scratch directories left by a previous run that was killed.
+    sweepTempDirs();
+
+    // Files opened through Explorer arrive in argv. This used to be read only in
+    // the second-instance handler, so the file associations declared in
+    // package.json did nothing unless the app already happened to be running.
+    const opened = filePathsFromArgv(process.argv);
+    if (opened.length) queue.add(opened);
+});
+
+app.on('before-quit', () => {
+    if (queue) queue.stop();
+    releaseTempDir();
 });
 
 app.on('window-all-closed', () => {
@@ -180,7 +224,7 @@ app.on('window-all-closed', () => {
 
 // Files dragged onto the taskbar icon or passed on the command line
 app.on('second-instance', (event, argv) => {
-    const paths = argv.slice(1).filter((arg) => !arg.startsWith('-'));
+    const paths = filePathsFromArgv(argv);
     if (paths.length && queue) queue.add(paths);
     if (mainWindow) mainWindow.focus();
 });

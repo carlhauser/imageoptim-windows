@@ -31,6 +31,14 @@ function runTool(options) {
                 stdout = fs.openSync(stdoutPath, 'w');
             }
         } catch (err) {
+            // The second open can throw after the first succeeded, which would
+            // otherwise leak the descriptor opened above.
+            if (typeof stdin === 'number') {
+                try { fs.closeSync(stdin); } catch (ignored) { /* already closed */ }
+            }
+            if (typeof stdout === 'number') {
+                try { fs.closeSync(stdout); } catch (ignored) { /* already closed */ }
+            }
             reject(err);
             return;
         }

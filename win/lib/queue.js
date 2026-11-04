@@ -43,24 +43,40 @@ function makeResolver(binDir) {
 }
 
 // Port of DirScanner.m: dropping a folder queues every image inside it.
-function expandPaths(inputPaths, limit = 20000) {
+//
+// Asynchronous, because this runs inside the main process and a synchronous walk
+// of a deep tree freezes the window. Directories are tracked by their resolved
+// path: a junction or symlink pointing back up its own tree used to be followed
+// forever, and because such a cycle contains no new images the file-count cap
+// never stopped it either.
+async function expandPaths(inputPaths, limit = 20000) {
     const files = [];
-    const seen = new Set();
+    const seenFiles = new Set();
+    const seenDirs = new Set();
     const pending = [...inputPaths];
 
     while (pending.length && files.length < limit) {
         const current = pending.shift();
         let stat;
         try {
-            stat = fs.statSync(current);
+            stat = await fs.promises.stat(current);
         } catch (err) {
             continue;
         }
 
         if (stat.isDirectory()) {
+            let real = current;
+            try {
+                real = await fs.promises.realpath(current);
+            } catch (err) {
+                /* unresolvable: fall back to the literal path */
+            }
+            if (seenDirs.has(real)) continue;
+            seenDirs.add(real);
+
             let entries = [];
             try {
-                entries = fs.readdirSync(current, { withFileTypes: true });
+                entries = await fs.promises.readdir(current, { withFileTypes: true });
             } catch (err) {
                 continue;
             }
@@ -75,8 +91,8 @@ function expandPaths(inputPaths, limit = 20000) {
         if (!EXTENSIONS.includes(path.extname(current).toLowerCase())) continue;
 
         const key = path.resolve(current);
-        if (seen.has(key)) continue;
-        seen.add(key);
+        if (seenFiles.has(key)) continue;
+        seenFiles.add(key);
         files.push(key);
     }
 
@@ -93,6 +109,7 @@ class Queue extends EventEmitter {
         this.pending = [];
         this.running = 0;
         this.controller = null;
+        this.controllers = new Map(); // job id -> AbortController, for per-job stop
         this.semaphore = new Semaphore(this.workerLimit());
     }
 
@@ -111,8 +128,8 @@ class Queue extends EventEmitter {
         return [...seen.values()];
     }
 
-    add(inputPaths) {
-        const files = expandPaths(inputPaths);
+    async add(inputPaths) {
+        const files = await expandPaths(inputPaths);
         const added = [];
 
         for (const filePath of files) {
@@ -124,13 +141,19 @@ class Queue extends EventEmitter {
                 try {
                     job.originalSize = fs.statSync(filePath).size;
                     job.bestSize = job.originalSize;
+                    job.unreadable = false;
                 } catch (err) {
+                    job.unreadable = true;
                     job.setState('error', 'Can’t open the file');
                 }
             }
             added.push(job);
-            this.pending.push(job);
-            job.setState('queued');
+            // Queueing a job that is already pending or mid-run would give two
+            // concurrent runs over one file, racing in save().
+            if (!job.unreadable && !job.isRunning && !this.pending.includes(job)) {
+                this.pending.push(job);
+                job.setState('queued');
+            }
         }
 
         if (added.length) {
@@ -177,9 +200,17 @@ class Queue extends EventEmitter {
             const job = this.pending.shift();
             this.running += 1;
 
-            job.run(this.settings.all(), this.controller.signal)
+            // Each job gets its own controller as well as the batch one, so a
+            // single row can be cancelled - by removing it - without stopping
+            // everything else.
+            const perJob = new AbortController();
+            this.controllers.set(job.filePath, perJob);
+            const signal = AbortSignal.any([this.controller.signal, perJob.signal]);
+
+            job.run(this.settings.all(), signal)
                 .catch((err) => job.setState('error', err.message))
                 .finally(() => {
+                    this.controllers.delete(job.filePath);
                     this.running -= 1;
                     this.emit('progress', this.stats());
                     if (this.pending.length) {
@@ -196,11 +227,14 @@ class Queue extends EventEmitter {
     stop() {
         this.pending.length = 0;
         if (this.controller) this.controller.abort();
+        for (const controller of this.controllers.values()) controller.abort();
         this.emit('progress', this.stats());
     }
 
     clear() {
         this.stop();
+        // cleanup() now also removes the backup copy of each original, which
+        // used to be left in the temp directory forever.
         for (const job of this.jobs.values()) job.cleanup();
         this.jobs.clear();
         this.emit('progress', this.stats());
@@ -210,9 +244,14 @@ class Queue extends EventEmitter {
         for (const id of ids) {
             const job = this.jobs.get(id);
             if (!job) continue;
-            job.cleanup();
-            this.jobs.delete(id);
+            // Cancel first. Without this the job kept running, held its worker
+            // slot, and still wrote its result over a file the user had just
+            // taken out of the list.
+            const controller = this.controllers.get(id);
+            if (controller) controller.abort();
             this.pending = this.pending.filter((pendingJob) => pendingJob !== job);
+            this.jobs.delete(id);
+            if (!job.isRunning) job.cleanup();
         }
         this.emit('progress', this.stats());
     }
@@ -221,6 +260,7 @@ class Queue extends EventEmitter {
     // when the optimizer preferences change.
     again() {
         for (const job of this.jobs.values()) {
+            if (job.isRunning || this.pending.includes(job)) continue;
             this.pending.push(job);
             job.setState('queued');
         }
@@ -230,8 +270,8 @@ class Queue extends EventEmitter {
 
     revert(id) {
         const job = this.jobs.get(id);
-        if (!job) return false;
-        return job.revert();
+        if (!job) return { ok: false, reason: 'that file is no longer in the list' };
+        return job.revert(this.settings.all());
     }
 
     stats() {

@@ -114,6 +114,20 @@ per file - and oversubscribe the machine. Measured over thirty photos on a
 16-core machine: 2 workers 27.0s, 4 workers 15.0s, 8 workers 12.0s, 16 workers
 12.6s. The default is the core count capped at eight.
 
+## Saving safely
+
+The optimized result is staged beside the original and renamed onto it, which is
+atomic on NTFS, so an interrupted save leaves either the old file or the new one
+and never a truncated image. Before writing, the file is re-checked against the
+size and modification time it had when the optimizers started: if another program
+changed it in the meantime the save is refused, because the result was derived
+from the old bytes and the backup would be of the old bytes too.
+
+Each original is copied to a scratch directory before being replaced, and Revert
+restores from there through the same atomic path. That directory is created with
+`mkdtemp`, swept at startup and removed at quit, and a job's backup is deleted
+when it leaves the list.
+
 ## Differences from the macOS app
 
 * **No PNGOUT.** It is a closed-source binary that ImageOptim downloads
