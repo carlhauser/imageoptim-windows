@@ -281,6 +281,7 @@ function Build-LibPng {
     $code = Invoke-Step -Name 'libpng (static, for pngcrush)' -Script @"
 cmake -G Ninja -S libpng -B .build-win/libpng \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DPNG_SHARED=OFF \
     -DPNG_STATIC=ON \
     -DPNG_TOOLS=OFF \
@@ -306,6 +307,7 @@ function Build-MozJpeg {
     $code = Invoke-Step -Name 'MozJPEG (jpegtran, libjpeg.a)' -Script @"
 cmake -G Ninja -S libjpeg/src -B .build-win/mozjpeg \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DENABLE_SHARED=FALSE \
     -DENABLE_STATIC=TRUE \
     -DPNG_SUPPORTED=FALSE \
@@ -357,6 +359,11 @@ cmake --build .build-win/jpegoptim --parallel $Jobs
 function Build-AdvPng {
     $code = Invoke-Step -Name 'AdvPNG' -Script @"
 if [ ! -f configure ]; then ./autogen.sh; fi
+# aclocal.m4 and the Makefile.in files look older than their sources here, so
+# make tries to regenerate them and the `missing` wrapper asks for automake 1.9,
+# which no current MSYS2 has. noautomake.sh ships with this tree to touch those
+# files and stop the regeneration.
+if [ -f noautomake.sh ]; then sh noautomake.sh; fi
 # A Makefile is already here - ImageOptim's own stub, which only unpacks the
 # source tarball - so config.status is what says whether configure has run.
 if [ ! -f config.status ]; then
