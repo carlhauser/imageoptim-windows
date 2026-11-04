@@ -116,6 +116,39 @@ per file - and oversubscribe the machine. Measured over thirty photos on a
 16-core machine: 2 workers 27.0s, 4 workers 15.0s, 8 workers 12.0s, 16 workers
 12.6s. The default is the core count capped at eight.
 
+## Tests
+
+```sh
+cd win && npm test
+```
+
+No dependencies: `node:test` with the optimizers stubbed, so nothing is spawned.
+74 tests across four areas.
+
+`test/arguments.test.js` is the one that matters most. Every optimizer's command
+line is asserted against the macOS worker it was ported from, with the
+expectations taken from `imageoptim/Backend/Workers/*.m` rather than from
+`lib/tools.js`, so a drift in the port fails rather than being blessed. A wrong
+flag does not raise an error anywhere: the tool exits non-zero, the job reads
+that as "no improvement", and a broken optimizer is indistinguishable from an
+already-optimal file.
+
+`test/plan.test.js` covers which optimizers each format gets and in which group,
+`test/queue.test.js` covers folder scanning and queue order, and
+`test/job.test.js` covers the parts that can destroy a file: adopting a result,
+the atomic replace, the staleness refusals and revert.
+
+Stubbed tests cannot prove the optimizers *accept* those arguments.
+`test/binaries.test.js` does, by running the real executables; it is skipped
+unless a directory of them is given:
+
+```sh
+cd win && IMAGEOPTIM_BIN=/path/to/bin npm test
+```
+
+CI runs the stubbed suite on Linux for every push to `win/`, and the binary
+checks on Windows against the executables each build has just produced.
+
 ## Continuous integration
 
 `.github/workflows/windows.yml` builds every optimizer from the sources in this

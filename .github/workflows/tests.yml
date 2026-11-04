@@ -1,0 +1,33 @@
+# The stubbed suite: no optimizer binaries, no Windows runner, a few seconds.
+# Cheap enough to run on every push, unlike the Windows build.
+
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'win/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    paths:
+      - 'win/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No dependencies are needed: the suite uses node:test and stubs the
+      # optimizers, so nothing is spawned and no binaries are required.
+      - name: Run the test suite
+        working-directory: win
+        run: npm test

@@ -21,6 +21,11 @@ function tempDir() {
     return tempRoot;
 }
 
+// The .temp suffix is deliberate and load-bearing. advpng refuses a file named
+// *.tmp outright - "Error reading the signature" - while .temp, .png and even no
+// extension are all fine. Renaming these would disable advpng silently, since a
+// tool that exits non-zero is simply reported as no improvement. There is a
+// regression test for this in test/binaries.test.js.
 function tempPath(toolId) {
     tempCounter += 1;
     const unique = `${process.pid.toString(16)}.${tempCounter.toString(16)}`;

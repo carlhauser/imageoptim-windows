@@ -2,7 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { runTool, numberAfter, firstTwoNumbers } = require('./run');
+// Imported as a namespace rather than destructured so tests can substitute
+// runTool and capture the exact argv each optimizer would be given.
+const run = require('./run');
 const { PNG, JPEG, GIF, SVG, isSmall, isLarge } = require('./filetype');
 
 // One entry per optimizer, ported from imageoptim/Backend/Workers/*.m. The
@@ -36,7 +38,7 @@ const oxipng = {
             args.unshift('--strip=safe');
         }
 
-        const { code } = await runTool({ exe: ctx.exe, args, signal: ctx.signal });
+        const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
         if (code !== 0) return null;
         return { size: statSize(ctx.temp), label: 'OxiPNG' };
     },
@@ -61,7 +63,7 @@ const pngquant = {
             '-',
         ];
 
-        const { code } = await runTool({
+        const { code } = await run.runTool({
             exe: ctx.exe,
             args,
             stdinPath: ctx.input.path,
@@ -125,7 +127,7 @@ const zopflipng = {
         }
         args.unshift(`--timelimit=${Math.round(timelimit)}`);
 
-        const { code } = await runTool({ exe: ctx.exe, args, signal: ctx.signal });
+        const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
         if (code !== 0) return null;
 
         const size = statSize(ctx.temp);
@@ -148,10 +150,10 @@ const advpng = {
         fs.copyFileSync(ctx.input.path, ctx.temp); // advpng rewrites in place
 
         const args = [`-${level}`, '-z', '--', ctx.temp];
-        const { code, output } = await runTool({ exe: ctx.exe, args, signal: ctx.signal });
+        const { code, output } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
         if (code !== 0) return null;
 
-        const numbers = firstTwoNumbers(output);
+        const numbers = run.firstTwoNumbers(output);
         if (!numbers) return null;
 
         const reported = numbers[1];
@@ -183,7 +185,7 @@ const pngcrush = {
             args.unshift('-brute');
         }
 
-        const { code } = await runTool({ exe: ctx.exe, args, signal: ctx.signal });
+        const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
         if (code !== 0) return null;
 
         const size = statSize(ctx.temp);
@@ -219,8 +221,8 @@ const jpegoptim = {
             args.unshift(`-m${maxquality}`);
         }
 
-        const { output } = await runTool({ exe: ctx.exe, args, signal: ctx.signal });
-        const reported = numberAfter(output, ' --> ');
+        const { output } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
+        const reported = run.numberAfter(output, ' --> ');
         if (!reported || reported !== statSize(ctx.temp)) return null;
 
         if (lossy && !(ctx.input.byteSize * 0.95 > reported)) {
@@ -249,7 +251,7 @@ const jpegtran = {
 
         // Run from the executable's own directory so Windows finds any DLL that
         // ships beside it.
-        const { code } = await runTool({
+        const { code } = await run.runTool({
             exe: ctx.exe,
             args,
             cwd: path.dirname(ctx.exe),
@@ -288,7 +290,7 @@ const guetzli = {
             ctx.temp, ctx.temp,
         ];
 
-        const { code } = await runTool({ exe: ctx.exe, args, signal: ctx.signal });
+        const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
         if (code !== 0) return null;
         return { size: statSize(ctx.temp), label: 'Guetzli' };
     },
@@ -326,7 +328,7 @@ function makeGifsicle(interlace) {
                 args.unshift(`--lossy=${loss}`);
             }
 
-            const { code } = await runTool({ exe: ctx.exe, args, signal: ctx.signal });
+            const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
             if (code !== 0) return null;
 
             const size = statSize(ctx.temp);
@@ -351,7 +353,7 @@ const svgcleaner = {
     enabled: (s) => s.SvgcleanerEnabled,
     async run(ctx) {
         const args = ['--stdout', '--', ctx.input.path];
-        const { code } = await runTool({
+        const { code } = await run.runTool({
             exe: ctx.exe,
             args,
             stdoutPath: ctx.temp,
@@ -374,7 +376,7 @@ const svgo = {
         // runs it as Node when ELECTRON_RUN_AS_NODE is set, so the installer does
         // not have to ship a separate Node runtime.
         const lossy = ctx.settings.LossyEnabled ? '1' : '0';
-        const { code } = await runTool({
+        const { code } = await run.runTool({
             exe: process.execPath,
             args: [ctx.script, lossy, ctx.input.path, ctx.temp],
             signal: ctx.signal,

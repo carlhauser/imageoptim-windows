@@ -109,6 +109,15 @@ jobs:
         working-directory: win
         run: npm ci
 
+      # The strongest form of the argument tests: the flags are checked against
+      # the executables this run just compiled, so a tool that renamed or
+      # dropped an option fails the build rather than quietly optimizing
+      # nothing.
+      - name: Check the optimizers accept their arguments
+        working-directory: win
+        shell: bash
+        run: IMAGEOPTIM_BIN="$GITHUB_WORKSPACE/win/resources/bin" npm test
+
       - name: Build the installer
         working-directory: win
         run: npm run dist:win

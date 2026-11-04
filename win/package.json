@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist:win": "electron-builder --win --x64"
+    "dist:win": "electron-builder --win --x64",
+    "test": "node --test test/"
   },
   "devDependencies": {
     "electron": "45.2.2",
