@@ -93,7 +93,7 @@ with MinGW-w64 under MSYS2, and `win/` packages the app around them. See
 plans and the Zopfli size threshold were derived.
 
 The screenshots above were taken on Windows 11 from a real run, and were
-themselves optimized by this build: 36.2% smaller, Zopfli winning all five.
+themselves optimized by this build: 36.4% smaller, Zopfli winning all five.
 
 ---
 
