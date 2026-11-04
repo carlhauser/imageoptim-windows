@@ -116,6 +116,36 @@ per file - and oversubscribe the machine. Measured over thirty photos on a
 16-core machine: 2 workers 27.0s, 4 workers 15.0s, 8 workers 12.0s, 16 workers
 12.6s. The default is the core count capped at eight.
 
+## Continuous integration
+
+`.github/workflows/windows.yml` builds every optimizer from the sources in this
+repository on a `windows-latest` runner, then packages the app around them with
+electron-builder. It runs on demand and on changes to `build-windows.ps1` or
+`win/`, excluding markdown, because Windows runners bill at twice the rate.
+
+Getting it green took six runs and exposed faults that no amount of reading the
+script on macOS would have found:
+
+- `pacman -Syu` terminates its own shell after replacing `msys2-runtime`, so a
+  `||` fallback in the same command never executes.
+- `gifsicle/orig/.gitignore` contains `include` and
+  `zopfli-png/zopfli/.gitignore` contains `zopflipng`; both are build-output
+  names that collide with source directories, so those sources had never been
+  committed. They built locally only because the files existed on disk.
+- MozJPEG and libpng declare a `cmake_minimum_required` that CMake 4 rejects.
+- ImageOptim's zopfli fork evaluates filter strategies through Grand Central
+  Dispatch, which is macOS-only and uses clang block syntax; the call is now
+  behind `__APPLE__` with a serial loop elsewhere.
+- jpegoptim's CMakeLists globs every `*.c`, pulling in a vendored GNU getopt
+  that needs autotools feature macros, and its `win32_compat.h` aliases `lstat`
+  to `_stat`, which on MinGW-w64 expands to `_stat64i32` and takes a different
+  struct than `misc.c` passes.
+- AdvanceCOMP 1.15 declares `throw()` specifications that C++17 removed.
+- `svgo.js` is not an executable, so it sat outside the `bin/` artifact path and
+  never reached the packaging job. The app shipped with no SVGO and reported
+  nothing, because a missing optimizer is skipped by design. The packaging job
+  now fails if it is absent.
+
 ## Runtime
 
 Electron 45.2.2 (Node 24, Chromium 156). Electron patches only its newest three
