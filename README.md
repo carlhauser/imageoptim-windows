@@ -49,8 +49,7 @@ the sources in this repository.
 The installed app updates itself: it checks for a newer release shortly after
 starting (or on **Help → Check for Updates…**), downloads it in the background
 and offers to restart. The zip copy can't replace its own files, so it only says
-that a new version is out; unzip the newer zip in place of the old one. Versions
-up to 1.4.2 don't check yet, so install the next one by hand once.
+that a new version is out; unzip the newer zip in place of the old one.
 
 The app is not code-signed, so Windows shows a blue "Windows protected your PC"
 box on first launch — **More info** → **Run anyway**. Unblocking the zip before

@@ -203,7 +203,7 @@ function Invoke-Step {
 # zlib1, libpng16 - starts on the build machine and on any PC that happens to
 # have Git for Windows' mingw64\bin on PATH, and fails with 0xC0000135 (DLL not
 # found) everywhere else, which the app cannot tell from "already optimal".
-# Release 1.4.0 shipped five optimizers like that. Anything the executable
+# An early build shipped five optimizers like that. Anything the executable
 # imports that exists in MinGW's own bin directory is not a system DLL.
 function Test-SelfContained {
     param([Parameter(Mandatory)] [string] $Path)

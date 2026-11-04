@@ -198,7 +198,7 @@ Running it all on a Windows 11 machine, rather than only in CI, found four more:
   real executables. The glob is now unquoted: `cmd.exe` hands it to Node, which
   expands it, and a POSIX shell expands it itself. Both CI test steps also fail
   if no tests ran, and the Windows one if any were skipped.
-- **Release 1.4.0 shipped five optimizers that only ran by accident.** AdvPNG,
+- **An early build shipped five optimizers that only ran by accident.** AdvPNG,
   Gifsicle, Guetzli, Pngcrush and Zopfli were linked against MinGW runtime DLLs
   (libstdc++, libgcc_s, winpthread, zlib1, libpng16) that are not shipped. They
   loaded wherever Git for Windows' `mingw64\bin` happened to be on PATH - the
@@ -304,8 +304,8 @@ private one answers all three with 404. `ENABLED` in `lib/updater.js` switches
 the whole thing off - no check at startup, no **Check for Updates…** in the Help
 menu, and electron-updater never loaded.
 
-Copies installed from 1.4.2 or earlier were built with the updater off and never
-check, so the first release with it on has to be installed by hand once.
+It never installs a lower version than the one running, so going back means
+uninstalling and running the older installer by hand.
 
 ### What it does
 
@@ -356,30 +356,30 @@ installed from then on accept only updates signed by the same publisher.
 1. Set the new version in `win/package.json` and its lock file:
 
    ```sh
-   cd win && npm version 1.5.0 --no-git-tag-version
+   cd win && npm version 0.2.0 --no-git-tag-version
    ```
 
 2. Commit that, then tag the commit and push both:
 
    ```sh
-   git tag v1.5.0
+   git tag v0.2.0
    ```
 
    ```sh
-   git push origin main v1.5.0
+   git push origin main v0.2.0
    ```
 
 3. The tag starts `.github/workflows/windows.yml`. It refuses a tag that does
    not match `package.json` before compiling anything, builds every optimizer
    and the app, runs the tests including the binary checks (failing if none ran
    or any were skipped), and then the `release` job publishes GitHub Release
-   `v1.5.0` with:
+   `v0.2.0` with:
 
    | file | for |
    | --- | --- |
-   | `ImageOptim-Setup-1.5.0.exe` | the installer |
-   | `ImageOptim-1.5.0-win.zip` | the portable copy |
-   | `ImageOptim-Setup-1.5.0.exe.blockmap` | for the updater: differential downloads |
+   | `ImageOptim-Setup-0.2.0.exe` | the installer |
+   | `ImageOptim-0.2.0-win.zip` | the portable copy |
+   | `ImageOptim-Setup-0.2.0.exe.blockmap` | for the updater: differential downloads |
    | `latest.yml` | for the updater: version, file name, sha512 |
 
    Release notes are generated from the commits since the previous tag and can
@@ -400,7 +400,7 @@ higher version.
 
 The installer is named without spaces (`nsis.artifactName`). GitHub turns spaces
 in asset names into dots while `latest.yml` names a dashed copy, so an
-`ImageOptim Setup 1.5.0.exe` uploaded as it is would never be found.
+`ImageOptim Setup 0.2.0.exe` uploaded as it is would never be found.
 `npm run dist:win` passes `--publish never` because electron-builder otherwise
 publishes by itself whenever it sees a tag on CI; uploading is left to the
 release job alone.

@@ -230,8 +230,8 @@ jobs:
       # Re-running the workflow for a tag replaces the assets of its release
       # rather than failing because the release already exists.
       #
-      # GitHub's release API fails now and then on its own: 1.4.4 took four
-      # attempts through an incident, failing with a 502 on publishing and
+      # GitHub's release API fails now and then on its own: one release took
+      # four attempts through an incident, failing with a 502 on publishing and
       # then a 404 uploading to the draft it had just created. So each attempt
       # is retried with a growing pause, and a draft an attempt left behind is
       # completed and published rather than duplicated.
