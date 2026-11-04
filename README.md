@@ -27,9 +27,13 @@ format, and lists which optimizers are actually installed.
 
 ### Download
 
-Grab `ImageOptim-Windows-Portable.zip` from
-[Releases](https://github.com/carlhauser/imageoptim-windows/releases), unzip it
-anywhere and run `ImageOptim.exe`. Nothing is installed.
+From [Releases](https://github.com/carlhauser/imageoptim-windows/releases),
+either `ImageOptim Setup <version>.exe` to install, or
+`ImageOptim-<version>-win.zip` to unzip anywhere and run `ImageOptim.exe` with
+nothing installed.
+
+Both are built on a Windows machine in CI, with every optimizer compiled from
+the sources in this repository.
 
 The app is not code-signed, so Windows shows a blue "Windows protected your PC"
 box on first launch — **More info** → **Run anyway**. Unblocking the zip before
