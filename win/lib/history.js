@@ -44,10 +44,13 @@ function statKey(filePath, stat) {
 // where more means more thorough. A remembered file counts as optimized when
 // it was done at least this thoroughly in every respect.
 function profileFor(type, settings, { level } = {}) {
+    const webpOrAvif = type === 'webp' || type === 'avif';
     return {
         level: level || Number(settings.AdvPngLevel) || 4,
         lossy: settings.LossyEnabled ? 1 : 0,
-        strip: (type === 'png' && settings.PngOutRemoveChunks) || (type === 'jpeg' && settings.JpegTranStripAll) ? 1 : 0,
+        strip: (type === 'png' && settings.PngOutRemoveChunks)
+            || (type === 'jpeg' && settings.JpegTranStripAll)
+            || (webpOrAvif && settings.WebPAvifStripMetadata) ? 1 : 0,
         thorough: type === 'png' && settings.ThoroughPng ? 1 : 0,
         guetzli: type === 'jpeg' && settings.GuetzliEnabled && Number(settings.JpegOptimMaxQuality) >= 80 ? 1 : 0,
     };

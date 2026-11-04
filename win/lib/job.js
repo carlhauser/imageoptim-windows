@@ -8,7 +8,9 @@ const { EventEmitter } = require('events');
 const tools = require('./tools');
 const { hashFile, statKey, profileFor, satisfies } = require('./history');
 const { keepOriginal, removeIfEmpty } = require('./originals');
-const { detectType, typeFromExtension, isSmall, PNG, JPEG, GIF, SVG } = require('./filetype');
+const {
+    detectType, inspect, typeFromExtension, isSmall, HEADER_BYTES, PNG, JPEG, GIF, SVG, WEBP, AVIF,
+} = require('./filetype');
 
 let tempCounter = 0;
 let tempRoot = null;
@@ -74,6 +76,31 @@ function unlinkQuietly(filePath) {
     }
 }
 
+// Why a WebP or AVIF file got no optimizer: short enough for the Savings
+// column, with the reason in full for its tooltip.
+const NOTES = {
+    lossyWebP: {
+        text: 'Lossy minification off',
+        detail: 'A lossy WebP can only be made smaller by re-encoding it, which needs Lossy minification on (Settings, Options).',
+    },
+    lossyAvif: {
+        text: 'Lossy minification off',
+        detail: 'AVIF has no lossless optimizer: it is re-encoded only with Lossy minification on (Settings, Options).',
+    },
+    animatedWebP: {
+        text: 'Animated: left as is',
+        detail: 'cwebp cannot re-encode an animated WebP, and it has no EXIF or XMP to strip.',
+    },
+    animatedAvif: {
+        text: 'Animated: left as is',
+        detail: 'Re-encoding would keep only the first frame of the animation.',
+    },
+    gainMap: {
+        text: 'Gain map: left as is',
+        detail: 'This AVIF has an HDR gain map, which re-encoding would lose.',
+    },
+};
+
 // A single image being optimized. Ports Job.m: pick the applicable optimizers,
 // run the destructive ones first and one at a time, then race the lossless ones,
 // and keep whichever output turned out smallest.
@@ -91,6 +118,8 @@ class Job extends EventEmitter {
         this.inputHash = null;
 
         this.type = null;
+        this.features = null;      // lib/filetype.js inspect(): WebP and AVIF only
+        this.note = null;          // why nothing was tried, when nothing was
         this.originalSize = 0;
         this.bestSize = 0;
         this.bestPath = null;      // temp file holding the best result so far
@@ -202,6 +231,8 @@ class Job extends EventEmitter {
             bestTool: this.bestTool,
             state: this.state,
             error: this.error,
+            note: this.note ? this.note.text : null,
+            noteDetail: this.note ? this.note.detail : null,
             progress: this.progressFraction(),
             canRevert: this.canRevert,
         };
@@ -239,6 +270,9 @@ class Job extends EventEmitter {
 
         const plan = [];
         let lossyConverted = false;
+        // Why a file of a supported type gets no optimizer, when that is down
+        // to the file rather than to switches turned off
+        let note = null;
 
         if (this.type === PNG) {
             if (hasBeenRunBefore) level += 1;
@@ -283,6 +317,36 @@ class Job extends EventEmitter {
         } else if (this.type === SVG) {
             if (settings.SvgoEnabled) plan.push({ tool: tools.byId('svgo') });
             if (settings.SvgcleanerEnabled) plan.push({ tool: tools.byId('svgcleaner') });
+        } else if (this.type === WEBP) {
+            const webp = this.features || {};
+            // Stripping goes first, so that the lossy pass is measured against
+            // the image data alone: dropping a large XMP packet must not count
+            // towards the saving a re-encode has to make.
+            if (tools.byId('webpmux').enabled(settings) && (webp.exif || webp.xmp)) {
+                plan.push({ tool: tools.byId('webpmux'), first: true });
+            }
+            // cwebp cannot decode an animation, and a lossless file stays
+            // lossless: it is usually a graphic, where lossy artefacts show
+            if (webp.animated) {
+                note = NOTES.animatedWebP;
+            } else if (webp.lossless) {
+                if (settings.CwebpEnabled) plan.push({ tool: tools.byId('cwebp') });
+            } else if (tools.byId('cwebp-lossy').enabled(settings)) {
+                plan.push({ tool: tools.byId('cwebp-lossy'), first: true });
+            } else if (settings.CwebpEnabled && !lossyEnabled) {
+                note = NOTES.lossyWebP;
+            }
+        } else if (this.type === AVIF) {
+            const avif = this.features || {};
+            if (avif.animated) {
+                note = NOTES.animatedAvif;
+            } else if (avif.gainMap) {
+                note = NOTES.gainMap;
+            } else if (tools.byId('avifenc').enabled(settings)) {
+                plan.push({ tool: tools.byId('avifenc'), first: true });
+            } else if (settings.AvifencEnabled && !lossyEnabled) {
+                note = NOTES.lossyAvif;
+            }
         }
 
         // Optimizers that rewrite the image rather than merely recompressing it
@@ -297,7 +361,7 @@ class Job extends EventEmitter {
             (destructive ? runFirst : runLater).push({ ...step, level });
         }
 
-        return { runFirst, runLater, level };
+        return { runFirst, runLater, level, note: plan.length ? null : note };
     }
 
     async runTool(step, settings, signal) {
@@ -326,9 +390,11 @@ class Job extends EventEmitter {
             level: step.level,
             alternativeStrategy: Boolean(step.alternativeStrategy),
             lossyGif: Boolean(step.lossyGif),
+            features: this.features,
             signal,
             exe: resolved.exe,
             script: resolved.script,
+            helpers: resolved.helpers,
         };
 
         let result = null;
@@ -374,7 +440,7 @@ class Job extends EventEmitter {
         try {
             stat = fs.statSync(this.filePath);
             const fd = fs.openSync(this.filePath, 'r');
-            header = Buffer.alloc(Math.min(16, stat.size));
+            header = Buffer.alloc(Math.min(HEADER_BYTES, stat.size));
             fs.readSync(fd, header, 0, header.length, 0);
             fs.closeSync(fd);
             currentSize = stat.size;
@@ -414,7 +480,13 @@ class Job extends EventEmitter {
 
         this.type = detectType(header, this.filePath);
         if (!this.type) {
-            this.setState('error', 'File is neither PNG, GIF, JPEG nor SVG');
+            this.setState('error', 'File is not a PNG, JPEG, GIF, SVG, WebP or AVIF image');
+            return;
+        }
+        this.note = null;
+        this.features = inspect(this.type, this.filePath, header);
+        if (this.type === WEBP && !this.features) {
+            this.setState('error', 'Damaged WebP file');
             return;
         }
 
@@ -446,7 +518,7 @@ class Job extends EventEmitter {
             }
         }
 
-        const { runFirst, runLater, level } = this.planTools(settings);
+        const { runFirst, runLater, level, note } = this.planTools(settings);
         this.toolsTotal = runFirst.length + runLater.length;
         this.toolsDone = 0;
         // What the queue learns this file's duration under, now that the
@@ -454,6 +526,15 @@ class Job extends EventEmitter {
         this.costClassName = this.costClass(settings);
         this.costBytes = currentSize;
 
+        if (!this.toolsTotal && note) {
+            // Nothing that can be done to this file with these settings, which
+            // is not an error. Not remembered as optimized either: with lossy
+            // minification turned on later it would have something to do.
+            this.note = note;
+            this.runCount += 1;
+            this.setState('done');
+            return;
+        }
         if (!this.toolsTotal) {
             this.setState('error', 'All necessary tools have been disabled in Preferences');
             return;

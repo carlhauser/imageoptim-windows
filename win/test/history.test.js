@@ -268,3 +268,24 @@ test('queue — with the setting off, known files are queued', async () => {
     await queue.add([dir]);
     assert.strictEqual(queue.pending.length, 1);
 });
+
+test('an AVIF with nothing to do is done, says why, and is not remembered', async () => {
+    // AVIF is only ever re-encoded lossily. With lossy minification off there
+    // is nothing to do, which is not an error - and must not be remembered,
+    // or turning lossy minification on later would still skip the file.
+    const history = new History(storePath());
+    const file = path.join(scratch(), `still-${unique()}.avif`);
+    fs.copyFileSync(path.join(__dirname, 'fixtures', 'photo.avif'), file);
+    const job = new Job(file, { resolveTool: () => ({ exe: '/fake/tool', helpers: {} }), history });
+    await job.run({ ...DEFAULTS }, new AbortController().signal);
+    assert.strictEqual(job.state, 'done');
+    assert.strictEqual(job.type, 'avif');
+    assert.strictEqual(job.toJSON().note, 'Lossy minification off');
+    assert.match(job.toJSON().noteDetail, /no lossless optimizer/);
+    assert.strictEqual(history.count(), 0);
+});
+
+test('stripping WebP and AVIF metadata is part of what a run did', () => {
+    assert.strictEqual(profileFor('webp', DEFAULTS).strip, 1);
+    assert.strictEqual(profileFor('avif', { ...DEFAULTS, WebPAvifStripMetadata: false }).strip, 0);
+});

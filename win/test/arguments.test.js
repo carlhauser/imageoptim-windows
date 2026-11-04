@@ -199,3 +199,150 @@ test('svgo — lossy flag is passed through', async () => {
     const { args } = await captureArgs('svgo', { type: 'svg', settings: { LossyEnabled: true } });
     assert.strictEqual(args[1], '1');
 });
+
+// ------------------------------------------------------------------ WebP, AVIF
+//
+// The macOS app has no WebP or AVIF worker, so these are this port's own
+// command lines; the measurements behind them are in win/README.md. What
+// matters most is the same: a flag the tool rejects makes it exit non-zero,
+// which reads as "no improvement".
+
+const { parseAvifdecSummary, webpLosslessEffort, avifSpeed } = require('../lib/tools');
+
+test('cwebp — lossless, pixel for pixel, keeping only the ICC profile', async () => {
+    const { args, inputPath, tempPath } = await captureArgs('cwebp', { type: 'webp' });
+    assert.deepStrictEqual(args, [
+        '-lossless', '-z', '9', '-exact', '-mt', '-metadata', 'icc',
+        '-quiet', '-o', tempPath, '--', inputPath,
+    ]);
+});
+
+test('cwebp — keeps EXIF and XMP when stripping is off', async () => {
+    const { args } = await captureArgs('cwebp', { type: 'webp', settings: { WebPAvifStripMetadata: false } });
+    assert.strictEqual(args[args.indexOf('-metadata') + 1], 'all');
+});
+
+test('cwebp — effort 9, but 7 above 2 MB and 6 at the lowest levels', () => {
+    assert.strictEqual(webpLosslessEffort(4, 100 * 1024), 9);
+    assert.strictEqual(webpLosslessEffort(4, 3 * 1024 * 1024), 7);
+    assert.strictEqual(webpLosslessEffort(2, 100 * 1024), 6);
+});
+
+test('cwebp lossy — re-encodes at WebPQuality with the slowest method', async () => {
+    const { args, inputPath, tempPath, result } = await captureArgs('cwebp-lossy', {
+        type: 'webp', settings: { LossyEnabled: true, WebPQuality: 75 },
+    });
+    assert.deepStrictEqual(args, [
+        '-q', '75', '-m', '6', '-mt', '-metadata', 'icc',
+        '-quiet', '-o', tempPath, '--', inputPath,
+    ]);
+    assert.strictEqual(result.label, 'cwebp 75%');
+});
+
+test('cwebp lossy — a re-encode saving under 5% is not worth the loss', async () => {
+    const tiny = await captureArgs('cwebp-lossy', {
+        type: 'webp', size: 1000, outSize: 960, settings: { LossyEnabled: true },
+    });
+    assert.strictEqual(tiny.result, null, '4% smaller is refused');
+    const enough = await captureArgs('cwebp-lossy', {
+        type: 'webp', size: 1000, outSize: 950, settings: { LossyEnabled: true },
+    });
+    assert.ok(enough.result, '5% smaller is kept');
+});
+
+test('webpmux — one -strip per run, EXIF then XMP, chained', async () => {
+    const { calls, inputPath, tempPath } = await captureArgs('webpmux', {
+        type: 'webp', extra: { features: { exif: true, xmp: true } },
+    });
+    // Two -strip options in one run are an error ("Multiple '-strip'
+    // arguments specified"), so it takes two
+    assert.deepStrictEqual(calls.map((c) => c.args), [
+        ['-strip', 'exif', '-o', `${tempPath}.exif`, '--', inputPath],
+        ['-strip', 'xmp', '-o', tempPath, '--', `${tempPath}.exif`],
+    ]);
+});
+
+test('webpmux — asks only for the chunks the file has', async () => {
+    const { calls, inputPath, tempPath } = await captureArgs('webpmux', {
+        type: 'webp', extra: { features: { exif: false, xmp: true } },
+    });
+    // Stripping a chunk that is not there fails with WEBP_MUX_NOT_FOUND
+    assert.deepStrictEqual(calls.map((c) => c.args), [['-strip', 'xmp', '-o', tempPath, '--', inputPath]]);
+});
+
+const AVIFDEC_SUMMARY = [
+    'Image decoded: in.avif',
+    ' * Resolution     : 1600x1200',
+    ' * Bit Depth      : 10',
+    ' * Format         : YUV420',
+    ' * Alpha          : Absent',
+    ' * CLLI           : 470, 263',
+    ' * Gain map       : Absent',
+    'Wrote PNG: out.png',
+].join('\n');
+
+test('avifdec — the summary avifenc needs is read from its output', () => {
+    assert.deepStrictEqual(parseAvifdecSummary(AVIFDEC_SUMMARY),
+        { depth: 10, format: '420', gainMap: false, clli: '470,263' });
+    const gain = parseAvifdecSummary(' * Bit Depth      : 8\n * Format         : YUV444\n'
+        + ' * Gain map       : 400x300 pixels, 8 bit, YUV444\n');
+    assert.strictEqual(gain.gainMap, true);
+});
+
+test('avifenc — decodes to PNG with avifdec, then re-encodes like the original', async () => {
+    const { calls, inputPath, tempPath, result } = await captureArgs('avifenc', {
+        type: 'avif',
+        settings: { LossyEnabled: true, AvifQuality: 60 },
+        output: AVIFDEC_SUMMARY,
+        extra: { helpers: { avifdec: '/fake/bin/avifdec' } },
+    });
+    const decoded = `${tempPath}.png`;
+    assert.strictEqual(calls[0].exe, '/fake/bin/avifdec');
+    assert.deepStrictEqual(calls[0].args, ['--sato', '--png-compress', '0', '-d', '16', '--', inputPath, decoded]);
+    // The original's subsampling and depth, or a 4:2:0 10-bit photo would
+    // come back 4:4:4 and 12-bit; CLLI is what PNG cannot carry
+    assert.deepStrictEqual(calls[1].args, [
+        '-q', '60', '-s', '6', '-y', '420', '-d', '10', '--clli', '470,263',
+        '--ignore-exif', '--ignore-xmp', '--', decoded, tempPath,
+    ]);
+    assert.strictEqual(result.label, 'avifenc 60%');
+});
+
+test('avifenc — keeps EXIF and XMP when stripping is off', async () => {
+    const { args } = await captureArgs('avifenc', {
+        type: 'avif',
+        settings: { LossyEnabled: true, WebPAvifStripMetadata: false },
+        output: AVIFDEC_SUMMARY,
+        extra: { helpers: { avifdec: '/fake/bin/avifdec' } },
+    });
+    assert.ok(!args.includes('--ignore-exif') && !args.includes('--ignore-xmp'));
+});
+
+test('avifenc — leaves a 16-bit sample-transform file alone', async () => {
+    const { calls, result } = await captureArgs('avifenc', {
+        type: 'avif',
+        settings: { LossyEnabled: true },
+        output: ' * Bit Depth      : 16\n * Format         : YUV444\n * Gain map       : Absent\n',
+        extra: { helpers: { avifdec: '/fake/bin/avifdec' } },
+    });
+    assert.strictEqual(calls.length, 1, 'avifenc must not run: it encodes at most 12 bits');
+    assert.strictEqual(result, null);
+});
+
+test('avifenc — leaves a file with a gain map alone', async () => {
+    const { calls, result } = await captureArgs('avifenc', {
+        type: 'avif',
+        settings: { LossyEnabled: true },
+        output: ' * Bit Depth      : 8\n * Format         : YUV444\n * Gain map       : 400x300 pixels\n',
+        extra: { helpers: { avifdec: '/fake/bin/avifdec' } },
+    });
+    assert.strictEqual(calls.length, 1, 'avifenc must not run');
+    assert.strictEqual(result, null);
+});
+
+test('avifenc — speed 6 at the default effort, 4 at the highest', () => {
+    assert.strictEqual(avifSpeed(4), 6);
+    assert.strictEqual(avifSpeed(5), 5);
+    assert.strictEqual(avifSpeed(7), 4);
+    assert.strictEqual(avifSpeed(1), 8);
+});

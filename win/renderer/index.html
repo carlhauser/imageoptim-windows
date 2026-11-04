@@ -68,7 +68,7 @@
                 <div id="empty-state">
                     <span class="empty-art" aria-hidden="true"><span class="icon i-empty"></span></span>
                     <p class="empty-title">Drop images here</p>
-                    <p class="empty-hint">PNG, JPEG, GIF and SVG files, or whole folders.<br>
+                    <p class="empty-hint">PNG, JPEG, GIF, SVG, WebP and AVIF files, or whole folders.<br>
                        Files are optimized and overwritten in place.</p>
                 </div>
             </div>
@@ -111,6 +111,13 @@
                         <label class="row"><span class="row-text">Svgcleaner</span><input type="checkbox" class="switch" data-setting="SvgcleanerEnabled"></label>
                     </div>
 
+                    <h2>WebP and AVIF</h2>
+                    <div class="card">
+                        <label class="row"><span class="row-text">cwebp <small>lossless WebP always; lossy WebP with lossy minification</small></span><input type="checkbox" class="switch" data-setting="CwebpEnabled"></label>
+                        <label class="row"><span class="row-text">webpmux <small>strips EXIF and XMP from WebP</small></span><input type="checkbox" class="switch" data-setting="WebpmuxEnabled"></label>
+                        <label class="row"><span class="row-text">avifenc <small>re-encodes AVIF, with lossy minification only</small></span><input type="checkbox" class="switch" data-setting="AvifencEnabled"></label>
+                    </div>
+
                     <h2>Installed tools</h2>
                     <div class="card">
                         <ul id="tool-list"></ul>
@@ -137,12 +144,23 @@
                             <input type="range" min="30" max="100" step="1" data-setting="GifQuality">
                             <output data-output="GifQuality"></output>
                         </div>
+                        <div class="slider">
+                            <span>WebP quality</span>
+                            <input type="range" min="30" max="100" step="1" data-setting="WebPQuality">
+                            <output data-output="WebPQuality"></output>
+                        </div>
+                        <div class="slider">
+                            <span>AVIF quality</span>
+                            <input type="range" min="30" max="100" step="1" data-setting="AvifQuality">
+                            <output data-output="AvifQuality"></output>
+                        </div>
                     </div>
 
                     <h2>Files</h2>
                     <div class="card">
                         <label class="row"><span class="row-text">Strip metadata from PNG</span><input type="checkbox" class="switch" data-setting="PngOutRemoveChunks"></label>
                         <label class="row"><span class="row-text">Strip metadata from JPEG</span><input type="checkbox" class="switch" data-setting="JpegTranStripAll"></label>
+                        <label class="row"><span class="row-text">Strip metadata from WebP and AVIF <small>EXIF and XMP; the colour profile stays</small></span><input type="checkbox" class="switch" data-setting="WebPAvifStripMetadata"></label>
                         <label class="row"><span class="row-text">Preserve file dates</span><input type="checkbox" class="switch" data-setting="PreserveDates"></label>
                         <label class="row"><span class="row-text">Keep originals <small>copied into an “ImageOptim originals” folder beside each file before it is first changed</small></span><input type="checkbox" class="switch" data-setting="KeepOriginals"></label>
                     </div>

@@ -34,6 +34,8 @@ function formatSavings(job) {
     if (job.state === 'running') return 'optimizing…';
     if (job.state === 'reverted') return 'reverted';
     if (job.state === 'skipped' && !job.percentOptimized) return 'already optimized';
+    // WebP and AVIF files nothing could be done to, and why
+    if (job.state === 'done' && job.note) return job.note;
     if (!job.percentOptimized) return '—';
     return `${job.percentOptimized.toFixed(1)}%`;
 }
@@ -64,7 +66,7 @@ function renderRow(job) {
     tr.dataset.state = job.state === 'done' && !job.percentOptimized ? 'unchanged' : job.state;
     sizeCell.textContent = formatBytes(job.bestSize);
     savingsCell.textContent = formatSavings(job);
-    savingsCell.title = job.state === 'error' ? (job.error || 'Error') : '';
+    savingsCell.title = job.state === 'error' ? (job.error || 'Error') : (job.state === 'done' && job.noteDetail) || '';
     savingsCell.classList.toggle('none', !job.percentOptimized && job.state !== 'error');
     savingsCell.classList.toggle('error', job.state === 'error');
     toolCell.textContent = job.bestTool || '';
@@ -99,7 +101,7 @@ let lastQueued = 0;
 let lastRows = 0;
 let keepOriginals = false; // Settings → Options → Keep originals
 
-const keptHint = 'PNG, JPEG, GIF and SVG files, or whole folders.<br>'
+const keptHint = 'PNG, JPEG, GIF, SVG, WebP and AVIF files, or whole folders.<br>'
     + 'Files are optimized in place; each original is kept in an “ImageOptim originals” folder beside it.';
 
 const isQueued = (state) => state === 'queued' || state === 'running';

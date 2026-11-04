@@ -13,7 +13,11 @@ same per-format plans and the same command-line arguments.
 ## ImageOptim for Windows
 
 Drop files or folders in; each image is optimized in place and the smallest
-result of every applicable optimizer is kept. One bar runs along the top: the
+result of every applicable optimizer is kept. It takes PNG, JPEG, GIF and SVG
+like the macOS app, and WebP and AVIF as well: lossless WebP is recompressed
+losslessly with cwebp and EXIF and XMP are stripped, and with lossy
+minification on, lossy WebP and AVIF are re-encoded (cwebp, avifenc) when that
+saves at least 5%. One bar runs along the top: the
 **Queue** and **Done** tabs on the left, the commands as icons on the right.
 Files waiting or being optimized are under Queue; each one moves to Done as it
 finishes, and the window switches to Done when the queue runs out.

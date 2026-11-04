@@ -19,12 +19,12 @@ function tree(name, build) {
 
 test('expandPaths — picks up only supported extensions', async () => {
     const root = tree('ext', (r) => {
-        for (const f of ['a.png', 'b.JPG', 'c.jpeg', 'd.gif', 'e.svg', 'f.txt', 'g.psd', 'h']) {
+        for (const f of ['a.png', 'b.JPG', 'c.jpeg', 'd.gif', 'e.svg', 'f.txt', 'g.psd', 'h', 'i.webp', 'j.AVIF', 'k.heic']) {
             fs.writeFileSync(path.join(r, f), 'x');
         }
     });
     const found = (await expandPaths([root])).map((p) => path.basename(p)).sort();
-    assert.deepStrictEqual(found, ['a.png', 'b.JPG', 'c.jpeg', 'd.gif', 'e.svg']);
+    assert.deepStrictEqual(found, ['a.png', 'b.JPG', 'c.jpeg', 'd.gif', 'e.svg', 'i.webp', 'j.AVIF']);
 });
 
 test('expandPaths — descends, and skips dot files', async () => {

@@ -212,7 +212,7 @@ function buildMenu() {
 async function openFileDialog() {
     const result = await dialog.showOpenDialog(mainWindow, {
         properties: ['openFile', 'multiSelections'],
-        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'svg'] }],
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif'] }],
     });
     if (!result.canceled && result.filePaths.length) {
         queue.add(result.filePaths);

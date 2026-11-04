@@ -38,6 +38,20 @@ function makeResolver(binDir) {
             if (fs.existsSync(candidate)) {
                 resolved = { exe: candidate };
             }
+            // Executables a tool runs besides its own, such as avifdec for
+            // avifenc: without every one of them the tool is as good as absent
+            if (resolved && tool.helpers) {
+                const helpers = {};
+                for (const name of tool.helpers) {
+                    const helper = path.join(binDir, name + EXE_SUFFIX);
+                    if (!fs.existsSync(helper)) {
+                        resolved = null;
+                        break;
+                    }
+                    helpers[name] = helper;
+                }
+                if (resolved) resolved.helpers = helpers;
+            }
         }
 
         cache.set(tool.id, resolved);
@@ -134,12 +148,21 @@ class Queue extends EventEmitter {
         const seen = new Map();
         for (const tool of tools.ALL) {
             const key = tool.exe || tool.script;
-            if (seen.has(key)) continue;
-            seen.set(key, {
-                name: tool.label,
-                key,
-                installed: Boolean(this.resolveTool(tool)),
-            });
+            if (!seen.has(key)) {
+                seen.set(key, {
+                    name: tool.label,
+                    key,
+                    installed: Boolean(this.resolveTool(tool)),
+                });
+            }
+            for (const helper of tool.helpers || []) {
+                if (seen.has(helper)) continue;
+                seen.set(helper, {
+                    name: helper,
+                    key: helper,
+                    installed: fs.existsSync(path.join(this.binDir, helper + EXE_SUFFIX)),
+                });
+            }
         }
         return [...seen.values()];
     }

@@ -46,8 +46,8 @@ still runs with fewer optimizers.
 
 The script also builds `cwebp.exe` and `webpmux.exe` from libwebp, and
 `avifenc.exe` and `avifdec.exe` from libavif. libavif uses AOM for both encoding
-and decoding and links the libpng and MozJPEG built above. The app does not run
-any of the four yet.
+and decoding and links the libpng and MozJPEG built above. What the app does
+with them is under [WebP and AVIF](#webp-and-avif).
 
 ```powershell
 .\build-windows.ps1 -Only libwebp,aom,libavif -SkipBootstrap
@@ -134,11 +134,62 @@ The plan for each image is a port of `doEnqueueWorkersInCPUQueue` in
 | JPEG | Guetzli (lossy), JpegOptim, MozJPEG (jpegtran) |
 | GIF | Gifsicle, Giflossy (lossy) |
 | SVG | SVGO, Svgcleaner |
+| WebP | webpmux (strips EXIF and XMP), cwebp (lossless, or a lossy re-encode) |
+| AVIF | avifenc (lossy re-encode only) |
 
 Optimizers that rewrite an image rather than merely recompressing it run first
 and one at a time, so the rest see their output. The lossless ones then run in
 parallel against that result, and the smallest output wins. A file that no tool
 improved is left exactly as it was.
+
+### WebP and AVIF
+
+The macOS app handles neither, so these are this port's own, built on libwebp
+and libavif (see [WebP and AVIF codecs](#webp-and-avif-codecs)):
+
+* **A lossless WebP** is recompressed by `cwebp -lossless -z 9 -exact`, which
+  keeps every pixel, the colour under transparent ones included. It stays
+  lossless with lossy minification on: it is usually a graphic, where artefacts
+  show. Above 2 MB it gets `-z 7`: on a 12-megapixel photo `-z 9` took 22 s and
+  saved nothing.
+* **A lossy WebP** can only shrink by being re-encoded, so with lossy
+  minification off it only loses its metadata. With it on, cwebp re-encodes it
+  at **WebP quality** (default 75) with `-m 6`.
+* **An AVIF** has no lossless optimizer, so it is touched only with lossy
+  minification on. avifdec decodes it to a 16-bit PNG and avifenc encodes that
+  at **AVIF quality** (default 60), speed 6, or 4 at effort level 6 and up.
+  PNG rather than y4m in between, because PNG carries the ICC profile, EXIF,
+  XMP, alpha and the colour primaries and transfer, and avifdec applies any
+  rotation, mirroring and crop to the pixels as it writes. What PNG cannot
+  carry is passed along: the chroma subsampling and bit depth (or a 4:2:0
+  10-bit photo would come back 4:4:4 and 12-bit) and HDR light levels.
+* **Metadata:** EXIF and XMP are stripped from both (Strip metadata from WebP
+  and AVIF, on by default); the ICC profile always stays. webpmux strips EXIF
+  and XMP in two runs, since it takes one `-strip` at a time and fails on a
+  chunk that is not there.
+* **A lossy re-encode has to save at least 5%** over the file it was given, as
+  jpegoptim's lossy pass does, measured after the metadata is gone. Otherwise
+  the loss isn't worth it, and Optimize Again would re-encode the same file
+  over and over for a percent each time.
+* **Left alone:** animated WebP and AVIF (cwebp cannot decode an animation;
+  avifdec writes only its first frame), AVIF with an HDR gain map (it would be
+  lost), and AVIF of more than 12 bits. Such a row says why in the Savings
+  column, with the full reason in its tooltip, and is not remembered as
+  optimized, so turning lossy minification on later still works on it.
+
+The defaults come from a test over 22 WebP and 22 AVIF files made from the
+repository's sample images, of the kinds found on the web, with PSNR measured
+against the file as it was given:
+
+| | saved | PSNR |
+| --- | --- | --- |
+| lossless WebP, `-z 9` | 12.0% | identical |
+| lossy WebP, metadata stripped only | 10.7% | identical |
+| lossy WebP at 75 | 25.8% | 36-45 dB |
+| lossy WebP at 80 | 15.4% | 42-53 dB |
+| AVIF at 50 | 30.2% | 30-39 dB on photos: visibly worse |
+| AVIF at 60 | 12.7% | 41-50 dB |
+| AVIF at 60, speed 4 | 17.0% | the same, four times slower |
 
 ## Performance
 
@@ -198,7 +249,11 @@ already-optimal file.
 `test/plan.test.js` covers which optimizers each format gets and in which group,
 `test/queue.test.js` covers folder scanning and queue order, and
 `test/job.test.js` covers the parts that can destroy a file: adopting a result,
-the atomic replace, the staleness refusals and revert.
+the atomic replace, the staleness refusals and revert. `test/filetype.test.js`
+covers telling the formats apart, HEIC from AVIF included, and reading what a
+WebP or AVIF file holds. The repository has no WebP or AVIF images of its own,
+so `test/fixtures/` has three small ones, made from its sample images, for the
+binary checks below.
 
 `test/updater.test.js` drives the update logic against a fake electron-updater,
 so it needs neither the network nor the package installed: telling an install
@@ -353,6 +408,7 @@ original's dates, and stays there. `lib/originals.js` holds the rules:
 
 ## Differences from the macOS app
 
+* **WebP and AVIF** are optimized too; see [WebP and AVIF](#webp-and-avif).
 * **No PNGOUT.** It is a closed-source binary that ImageOptim downloads
   separately on macOS, and it is not redistributable here.
 * **Guetzli is off by default.** It takes minutes and gigabytes of RAM per
@@ -384,7 +440,7 @@ original's dates, and stays there. `lib/originals.js` holds the rules:
 
 Drop files or folders onto the window, or use the first two buttons on the right
 of the toolbar (Add files, Add a folder). Folders are scanned recursively for
-PNG, JPEG, GIF and SVG. A file that an earlier run already optimized - in this
+PNG, JPEG, GIF, SVG, WebP and AVIF. A file that an earlier run already optimized - in this
 session or a past one - goes straight to Done as "already optimized".
 
 The list has two tabs. **Queue** holds files waiting or being optimized;

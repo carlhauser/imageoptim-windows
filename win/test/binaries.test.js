@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { makeResolver } = require('../lib/queue');
+const { inspect, HEADER_BYTES } = require('../lib/filetype');
 const { DEFAULTS } = require('../lib/settings');
 const { scratch, cleanupScratch, tools, run } = require('./helpers');
 
@@ -30,6 +31,16 @@ const SAMPLES = {
     jpeg: ['libpng/pngbar.jpg'],
     gif: ['gifsicle/orig/logo.gif'],
     svg: ['guetzli/guetzli/guetzli.svg'],
+    // Made for these tests: the repository has no WebP or AVIF of its own.
+    // The WebP is lossless and carries ICC, EXIF and XMP, so that both
+    // webpmux runs and the lossless cwebp pass happen.
+    webp: ['win/test/fixtures/lossless-metadata.webp'],
+    avif: ['win/test/fixtures/photo.avif'],
+};
+
+// Tools that need a different kind of file than their type's sample
+const SAMPLE_FOR = {
+    'cwebp-lossy': 'win/test/fixtures/lossy.webp',
 };
 
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -58,8 +69,8 @@ for (const tool of tools.ALL) {
         }
 
         const type = tool.types[0];
-        const src = sample(type);
-        if (!src) {
+        const src = SAMPLE_FOR[tool.id] ? path.join(repoRoot, SAMPLE_FOR[tool.id]) : sample(type);
+        if (!src || !fs.existsSync(src)) {
             assert.fail(`no ${type} sample available in the repository`);
         }
 
@@ -68,46 +79,94 @@ for (const tool of tools.ALL) {
         // .temp, matching lib/job.js tempPath. The suffix matters: advpng
         // refuses a .tmp input outright. See the regression test below.
         const temp = path.join(scratch(), `bin-${tool.id}-out.temp`);
+        const header = fs.readFileSync(input).subarray(0, HEADER_BYTES);
 
-        // Run for real, but keep the exit code and output for inspection.
-        let seen = null;
+        // Run for real, but keep every exit code and output for inspection:
+        // webpmux and avifenc each run two commands.
+        const seen = [];
         const realRunTool = run.runTool;
         run.runTool = async (options) => {
             const result = await realRunTool(options);
-            seen = result;
+            seen.push({ exe: path.basename(options.exe), ...result });
             return result;
         };
 
+        let outcome;
         try {
-            await tool.run({
+            outcome = await tool.run({
                 input: { path: input, byteSize: fs.statSync(input).size, type },
                 temp,
                 settings: { ...DEFAULTS, LossyEnabled: true, GuetzliEnabled: true },
                 level: 4,
                 alternativeStrategy: false,
                 lossyGif: tool.id === 'gifsicle',
+                features: inspect(type, input, header),
                 signal: new AbortController().signal,
                 exe: resolved.exe,
                 script: resolved.script,
+                helpers: resolved.helpers,
             });
         } finally {
             run.runTool = realRunTool;
         }
 
-        assert.ok(seen, `${tool.id} never spawned anything`);
-        assert.notStrictEqual(seen.code, 127, `${tool.id} could not be executed`);
-
+        assert.ok(seen.length, `${tool.id} never spawned anything`);
         // pngquant uses 98 and 99 to decline an image; everything else should
         // succeed on a valid input.
         const benign = tool.id === 'pngquant' ? [0, 98, 99] : [0];
         const rejected = /unrecognized option|unknown option|unrecognised option|invalid option/i;
-        const hint = rejected.test(seen.output)
-            ? ' - it reported an option it did not recognise'
-            : '';
-        assert.ok(benign.includes(seen.code),
-            `${tool.id} exited ${seen.code}${hint}:\n${seen.output.slice(0, 400)}`);
+        for (const step of seen) {
+            assert.notStrictEqual(step.code, 127, `${step.exe} could not be executed`);
+            const hint = rejected.test(step.output)
+                ? ' - it reported an option it did not recognise'
+                : '';
+            assert.ok(benign.includes(step.code),
+                `${step.exe} exited ${step.code}${hint}:\n${step.output.slice(0, 400)}`);
+        }
+
+        // The new formats' tools are this port's own, with no macOS command
+        // line to check against, so their result is checked too: each of
+        // these samples has something to gain.
+        if (type === 'webp' || type === 'avif') {
+            assert.ok(outcome && outcome.size > 0 && outcome.size < fs.statSync(input).size,
+                `${tool.id} produced no smaller file`);
+        }
     });
 }
+
+test('cwebp output decodes to exactly the pixels it was given', { skip }, () => {
+    // -lossless -exact is meant to be pixel-identical, transparent pixels
+    // included. Checked with cwebp itself: re-encoding its own output must
+    // reproduce it byte for byte from the same pixels, which is only true if
+    // nothing was lost on the way.
+    const { execFileSync } = require('child_process');
+    const exe = path.join(BIN, process.platform === 'win32' ? 'cwebp.exe' : 'cwebp');
+    if (!fs.existsSync(exe)) return;
+    const src = path.join(repoRoot, SAMPLES.webp[0]);
+    const once = path.join(scratch(), 'exact-1.webp');
+    const twice = path.join(scratch(), 'exact-2.webp');
+    const opts = ['-lossless', '-z', '6', '-exact', '-metadata', 'all', '-quiet', '-o'];
+    execFileSync(exe, [...opts, once, '--', src], { stdio: 'pipe' });
+    execFileSync(exe, [...opts, twice, '--', once], { stdio: 'pipe' });
+    assert.ok(fs.readFileSync(once).equals(fs.readFileSync(twice)));
+});
+
+test('webpmux fails when asked to strip a chunk that is not there', { skip }, () => {
+    // Why tools.js only asks for the chunks inspectWebP found
+    const { execFileSync } = require('child_process');
+    const exe = path.join(BIN, process.platform === 'win32' ? 'webpmux.exe' : 'webpmux');
+    if (!fs.existsSync(exe)) return;
+    const out = path.join(scratch(), 'strip-none.webp');
+    let status = 0;
+    try {
+        execFileSync(exe, ['-strip', 'exif', '-o', out, '--', path.join(repoRoot, SAMPLE_FOR['cwebp-lossy'])],
+            { stdio: 'pipe' });
+    } catch (err) {
+        status = err.status;
+    }
+    assert.notStrictEqual(status, 0, 'if this ever passes, the feature check in tools.js can go');
+    assert.ok(!fs.existsSync(out));
+});
 
 test('advpng refuses a .tmp input, which is why temp files end in .temp',
     { skip }, async () => {

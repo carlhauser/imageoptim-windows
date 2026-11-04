@@ -44,6 +44,23 @@ const DEFAULTS = {
     SvgoEnabled: true,
     SvgcleanerEnabled: true,
 
+    // WebP and AVIF, which the macOS app does not handle. cwebp recompresses
+    // a lossless WebP losslessly, and with lossy minification on re-encodes a
+    // lossy one at WebPQuality; webpmux strips its EXIF and XMP. AVIF has no
+    // lossless optimizer, so avifenc only re-encodes, at AvifQuality, and only
+    // with lossy minification on. The qualities come from a test over 13 lossy
+    // WebP and 22 AVIF files of the kind found on the web: WebP at 75 saved
+    // 26% (PSNR against the input 36-45 dB), AVIF at 60 saved 13% (41-50 dB),
+    // and AVIF at 50 was visibly worse on photos.
+    CwebpEnabled: true,
+    WebpmuxEnabled: true,
+    AvifencEnabled: true,
+    WebPQuality: 75,
+    AvifQuality: 60,
+    // EXIF and XMP, from both formats. The ICC profile always stays: without
+    // it the colours would change.
+    WebPAvifStripMetadata: true,
+
     // Which file to start on. Smallest first means the list fills with finished
     // rows quickly instead of appearing stuck on one big image; largest first
     // finishes sooner overall, because the slowest file is not left running on

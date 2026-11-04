@@ -55,6 +55,12 @@ const HEADERS = {
     jpeg: Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
     gif: Buffer.from('GIF89a'),
     svg: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>'),
+    // RIFF <size> WEBP, then the start of a VP8L chunk
+    webp: Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8L'), Buffer.alloc(4)]),
+    // An 'ftyp' box: size, type, major brand, minor version, compatible brands
+    avif: Buffer.concat([
+        Buffer.from([0, 0, 0, 0x1c]), Buffer.from('ftypavif'), Buffer.alloc(4), Buffer.from('avifmif1miaf'),
+    ]),
 };
 
 function makeFile(name, type, bytes = 4096) {
@@ -66,25 +72,31 @@ function makeFile(name, type, bytes = 4096) {
 }
 
 // Runs one optimizer with runTool replaced, and returns the argv it would have
-// used. Nothing is spawned.
-async function captureArgs(toolId, { settings = {}, input, type = 'png', size = 4096, level = 4, extra = {} } = {}) {
+// used. Nothing is spawned. `calls` has every command, for the tools that run
+// more than one; `args` and `options` are the last. `output` is what each
+// stubbed command prints, and `outSize` how big a file it writes.
+async function captureArgs(toolId, {
+    settings = {}, input, type = 'png', size = 4096, level = 4, extra = {},
+    output = ' --> 16 bytes\n16 16 100% out\n', outSize = 16,
+} = {}) {
     const tool = tools.ALL.find((t) => t.id === toolId);
     if (!tool) throw new Error(`no such tool: ${toolId}`);
 
     const inputPath = input || makeFile(`${toolId}-in.${type}`, type, size);
     const tempPath = path.join(scratch(), `${toolId}-out.tmp`);
 
-    let captured = null;
+    const calls = [];
     const realRunTool = run.runTool;
     run.runTool = async (options) => {
-        captured = options;
+        calls.push(options);
         // Satisfy the tools that parse output for the resulting size
-        fs.writeFileSync(tempPath, 'x'.repeat(16));
-        return { code: 0, output: ' --> 16 bytes\n16 16 100% out\n' };
+        fs.writeFileSync(tempPath, 'x'.repeat(outSize));
+        return { code: 0, output };
     };
 
+    let result;
     try {
-        await tool.run({
+        result = await tool.run({
             input: { path: inputPath, byteSize: fs.statSync(inputPath).size, type },
             temp: tempPath,
             settings: { ...DEFAULTS, ...settings },
@@ -100,8 +112,9 @@ async function captureArgs(toolId, { settings = {}, input, type = 'png', size = 
         run.runTool = realRunTool;
     }
 
-    if (!captured) throw new Error(`${toolId} never reached runTool`);
-    return { args: captured.args, options: captured, inputPath, tempPath };
+    if (!calls.length) throw new Error(`${toolId} never reached runTool`);
+    const captured = calls[calls.length - 1];
+    return { args: captured.args, options: captured, calls, inputPath, tempPath, result };
 }
 
 module.exports = { captureArgs, makeFile, scratch, cleanupScratch, tools, run, DEFAULTS };

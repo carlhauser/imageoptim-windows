@@ -68,6 +68,16 @@
         "ext": "svg",
         "name": "SVG image",
         "role": "Editor"
+      },
+      {
+        "ext": "webp",
+        "name": "WebP image",
+        "role": "Editor"
+      },
+      {
+        "ext": "avif",
+        "name": "AVIF image",
+        "role": "Editor"
       }
     ],
     "win": {

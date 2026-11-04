@@ -5,7 +5,7 @@ const path = require('path');
 // Imported as a namespace rather than destructured so tests can substitute
 // runTool and capture the exact argv each optimizer would be given.
 const run = require('./run');
-const { PNG, JPEG, GIF, SVG, isSmall, isLarge } = require('./filetype');
+const { PNG, JPEG, GIF, SVG, WEBP, AVIF, isSmall, isLarge } = require('./filetype');
 
 // One entry per optimizer, ported from imageoptim/Backend/Workers/*.m. The
 // command lines are deliberately identical to the macOS app's: these flags are
@@ -387,15 +387,213 @@ const svgo = {
     },
 };
 
+// ---------------------------------------------------------------- WebP, AVIF
+//
+// Neither format exists in the macOS app, so these command lines are this
+// port's own. The measurements behind them are in win/README.md, "WebP and
+// AVIF".
+
+// A lossy re-encode has to save at least this much over the file it was given,
+// as jpegoptim's lossy pass does, or it is not worth another generation of
+// loss. It also stops Optimize Again from re-encoding the same file over and
+// over for a percent each time.
+const LOSSY_MIN_SAVING = 0.05;
+
+function lossyWorthIt(ctx, size) {
+    return size > 0 && size <= ctx.input.byteSize * (1 - LOSSY_MIN_SAVING);
+}
+
+// cwebp -z. 9 is where the gains are - a screenshot came out 41% smaller at 9
+// against 3% at 7 - but on a 12-megapixel photo it took 22 seconds and saved
+// nothing, where 7 took 6. A lossless WebP over 2 MB is a photograph more often
+// than not, so it gets 7.
+function webpLosslessEffort(level, byteSize) {
+    if (level <= 2) return 6;
+    return byteSize > 2 * 1024 * 1024 ? 7 : 9;
+}
+
+const cwebp = {
+    id: 'cwebp',
+    exe: 'cwebp',
+    label: 'cwebp',
+    types: [WEBP],
+    lossy: false,
+    enabled: (s) => s.CwebpEnabled,
+    async run(ctx) {
+        // -exact keeps the colour under fully transparent pixels, which
+        // -lossless alone is allowed to change, so the pixels are identical.
+        // -metadata icc copies the ICC profile across and drops EXIF and XMP.
+        const args = [
+            '-lossless', '-z', String(webpLosslessEffort(ctx.level, ctx.input.byteSize)),
+            '-exact', '-mt',
+            '-metadata', ctx.settings.WebPAvifStripMetadata ? 'icc' : 'all',
+            '-quiet', '-o', ctx.temp, '--', ctx.input.path,
+        ];
+        const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
+        if (code !== 0) return null;
+        return { size: statSize(ctx.temp), label: 'cwebp' };
+    },
+};
+
+const cwebpLossy = {
+    id: 'cwebp-lossy',
+    exe: 'cwebp',
+    label: 'cwebp',
+    types: [WEBP],
+    lossy: true,
+    enabled: (s) => s.LossyEnabled && s.CwebpEnabled && s.WebPQuality < 100 && s.WebPQuality > 30,
+    async run(ctx) {
+        const quality = Number(ctx.settings.WebPQuality);
+        const args = [
+            '-q', String(quality), '-m', '6', '-mt',
+            '-metadata', ctx.settings.WebPAvifStripMetadata ? 'icc' : 'all',
+            '-quiet', '-o', ctx.temp, '--', ctx.input.path,
+        ];
+        const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
+        if (code !== 0) return null;
+        const size = statSize(ctx.temp);
+        if (!lossyWorthIt(ctx, size)) return null;
+        return { size, label: `cwebp ${quality}%` };
+    },
+};
+
+// webpmux deletes one kind of chunk per run - two -strip options are an error -
+// so EXIF and XMP take one run each, chained through a second temp file. Only
+// the chunks the file actually has are asked for: asking for one that is not
+// there fails with WEBP_MUX_NOT_FOUND and writes nothing.
+const webpmux = {
+    id: 'webpmux',
+    exe: 'webpmux',
+    label: 'webpmux',
+    types: [WEBP],
+    lossy: false,
+    enabled: (s) => s.WebpmuxEnabled && s.WebPAvifStripMetadata,
+    async run(ctx) {
+        const features = ctx.features || {};
+        const chunks = ['exif', 'xmp'].filter((chunk) => features[chunk]);
+        if (!chunks.length) return null;
+
+        let source = ctx.input.path;
+        for (const [i, chunk] of chunks.entries()) {
+            const out = i === chunks.length - 1 ? ctx.temp : `${ctx.temp}.${chunk}`;
+            const args = ['-strip', chunk, '-o', out, '--', source];
+            const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
+            if (source !== ctx.input.path) unlinkQuietly(source);
+            if (code !== 0) {
+                unlinkQuietly(out);
+                return null;
+            }
+            source = out;
+        }
+        return { size: statSize(ctx.temp), label: 'webpmux' };
+    },
+};
+
+// What avifdec reports about the image it decoded, from the summary it prints.
+function parseAvifdecSummary(output) {
+    const field = (name) => {
+        const match = new RegExp(`\\* ${name}\\s*: (.*)`).exec(output);
+        return match ? match[1].trim() : null;
+    };
+    const format = /YUV(\d{3})/.exec(field('Format') || '');
+    const clli = /^(\d+),\s*(\d+)$/.exec(field('CLLI') || '');
+    return {
+        depth: Number(field('Bit Depth')) || 0,
+        format: format ? format[1] : null,
+        gainMap: Boolean(field('Gain map')) && field('Gain map') !== 'Absent',
+        clli: clli ? `${clli[1]},${clli[2]}` : null,
+    };
+}
+
+// avifenc's -s for an effort level: 6, its own default, at the default level 4,
+// down to 4 at 6 and above - about four times slower for another 4% (17% saved
+// against 13% at 60). 7 to 8 at the low levels.
+function avifSpeed(level) {
+    return Math.max(4, Math.min(8, 10 - level));
+}
+
+// AVIF has no lossless optimizer, so this is a lossy re-encode and only runs
+// with lossy minification on. avifenc cannot read AVIF, so avifdec decodes it
+// first. The intermediate is PNG rather than y4m because PNG carries the ICC
+// profile, Exif, XMP, alpha and the colour primaries and transfer across, where
+// y4m keeps none of the metadata and drops alpha from 4:2:0 images. avifdec
+// applies any rotation, mirroring and crop to the pixels as it writes, so the
+// image looks the same. What PNG cannot say - the chroma subsampling, the bit
+// depth, HDR content light levels - is read from avifdec's summary and passed
+// to avifenc, or a 4:2:0 photo would come back as 4:4:4 and a 10-bit one as 12.
+const avifenc = {
+    id: 'avifenc',
+    exe: 'avifenc',
+    helpers: ['avifdec'],
+    label: 'avifenc',
+    types: [AVIF],
+    lossy: true,
+    enabled: (s) => s.LossyEnabled && s.AvifencEnabled && s.AvifQuality < 100 && s.AvifQuality > 30,
+    async run(ctx) {
+        const avifdec = ctx.helpers && ctx.helpers.avifdec;
+        if (!avifdec) return null;
+
+        // Uncompressed, since it only lives until avifenc has read it: a
+        // 12-megapixel decode took 0.55 s like this and 3 s at the default.
+        // 16-bit, so that a 10- or 12-bit image keeps its precision. --sato
+        // decodes a sample-transform file whole, so that its summary says 16
+        // bits rather than the 12 of the base image alone.
+        const decoded = `${ctx.temp}.png`;
+        try {
+            const dec = await run.runTool({
+                exe: avifdec,
+                args: ['--sato', '--png-compress', '0', '-d', '16', '--', ctx.input.path, decoded],
+                signal: ctx.signal,
+            });
+            if (dec.code !== 0) return null;
+
+            const image = parseAvifdecSummary(dec.output);
+            // A gain map would be lost, and avifenc encodes at most 12 bits
+            if (image.gainMap || !image.format || !image.depth || image.depth > 12) return null;
+
+            const quality = Number(ctx.settings.AvifQuality);
+            const args = [
+                '-q', String(quality),
+                '-s', String(avifSpeed(ctx.level)),
+                '-y', image.format,
+                '-d', String(image.depth),
+            ];
+            if (image.clli) args.push('--clli', image.clli);
+            if (ctx.settings.WebPAvifStripMetadata) args.push('--ignore-exif', '--ignore-xmp');
+            args.push('--', decoded, ctx.temp);
+
+            const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
+            if (code !== 0) return null;
+            const size = statSize(ctx.temp);
+            if (!lossyWorthIt(ctx, size)) return null;
+            return { size, label: `avifenc ${quality}%` };
+        } finally {
+            unlinkQuietly(decoded);
+        }
+    },
+};
+
+function unlinkQuietly(filePath) {
+    try {
+        fs.unlinkSync(filePath);
+    } catch (err) {
+        /* not there */
+    }
+}
+
 const ALL = [
     pngquant, pngcrush, oxipng, advpng, zopflipng,
     guetzli, jpegoptim, jpegtran,
     makeGifsicle(false), makeGifsicle(true),
     svgo, svgcleaner,
+    webpmux, cwebpLossy, cwebp, avifenc,
 ];
 
 module.exports = {
     ALL,
     byId: (id) => ALL.find((t) => t.id === id),
     statSize,
+    parseAvifdecSummary,
+    webpLosslessEffort,
+    avifSpeed,
 };
