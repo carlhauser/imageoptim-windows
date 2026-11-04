@@ -200,6 +200,25 @@ tr.running .col-name-cell {
     padding: 4px 0;
 }
 
+.choice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 0;
+}
+
+.choice span { color: var(--text-dim); }
+
+.choice select {
+    font: inherit;
+    color: var(--text);
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2px 6px;
+}
+
 .slider span { color: var(--text-dim); }
 .slider input { grid-column: 1 / 2; width: 100%; }
 .slider output { font-variant-numeric: tabular-nums; }

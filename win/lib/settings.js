@@ -44,6 +44,12 @@ const DEFAULTS = {
     SvgoEnabled: true,
     SvgcleanerEnabled: true,
 
+    // Which file to start on. Smallest first means the list fills with finished
+    // rows quickly instead of appearing stuck on one big image; largest first
+    // finishes sooner overall, because the slowest file is not left running on
+    // its own at the end. 'added' keeps drop order.
+    QueueOrder: 'smallest', // 'smallest' | 'largest' | 'added'
+
     PreservePermissions: true,
     PreserveDates: false,
 

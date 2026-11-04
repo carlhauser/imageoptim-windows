@@ -103,6 +103,11 @@ cheap and does sometimes win, so it still runs. Over thirty photos:
 Thirteen times faster for 714 bytes out of 8.7 MB. `ThoroughPng` restores the
 macOS behaviour exactly: no size threshold and no time budget.
 
+`QueueOrder` decides which file is picked up next: `smallest` (the default) so
+the list fills with finished rows quickly rather than appearing stuck on one
+large image, `largest` so the slowest file is not left running alone at the end,
+or `added` to keep drop order. Only files that have not started are reordered.
+
 `MaxWorkers` caps how many optimizer processes run at once across every file.
 Without a global cap the two limits multiply - files in flight times optimizers
 per file - and oversubscribe the machine. Measured over thirty photos on a

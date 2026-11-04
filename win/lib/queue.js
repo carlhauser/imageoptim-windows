@@ -133,12 +133,25 @@ class Queue extends EventEmitter {
             job.setState('queued');
         }
 
-        if (added.length) this.start();
+        if (added.length) {
+            this.sortPending();
+            this.start();
+        }
         return added.map((job) => job.toJSON());
     }
 
     snapshot() {
         return [...this.jobs.values()].map((job) => job.toJSON());
+    }
+
+    // Reorders what has not started yet. Jobs already running are left alone.
+    sortPending() {
+        const order = this.settings.get('QueueOrder');
+        if (order === 'smallest') {
+            this.pending.sort((a, b) => a.originalSize - b.originalSize);
+        } else if (order === 'largest') {
+            this.pending.sort((a, b) => b.originalSize - a.originalSize);
+        }
     }
 
     start() {
@@ -211,6 +224,7 @@ class Queue extends EventEmitter {
             this.pending.push(job);
             job.setState('queued');
         }
+        this.sortPending();
         this.start();
     }
 

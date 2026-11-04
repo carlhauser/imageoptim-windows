@@ -219,7 +219,10 @@ settingsEl.addEventListener('input', async (event) => {
     if (!input) return;
 
     const key = input.dataset.setting;
-    const value = input.type === 'checkbox' ? input.checked : Number(input.value);
+    let value;
+    if (input.type === 'checkbox') value = input.checked;
+    else if (input.tagName === 'SELECT') value = input.value;
+    else value = Number(input.value);
 
     const output = settingsEl.querySelector(`[data-output="${key}"]`);
     if (output) output.value = value;
