@@ -265,7 +265,12 @@ unsigned TryOptimize(
 
   return 0;
 }
+// ImageOptim's fork evaluates the filter strategies in parallel with Grand
+// Central Dispatch. That is macOS-only, and the ^(){} block syntax it needs is a
+// clang extension, so other platforms get the same work done serially below.
+#ifdef __APPLE__
  #include <dispatch/dispatch.h>
+#endif
 // Use fast compression to check which PNG filter strategy gives the smallest
 // output. This allows to then do the slow and good compression only on that
 // filter type.
@@ -293,6 +298,7 @@ unsigned AutoChooseFilterStrategy(const std::vector<unsigned char>& image,
   size_t sizes_data[numstrategies];
   size_t *sizes = sizes_data;
 
+#ifdef __APPLE__
   dispatch_apply(numstrategies, dispatch_get_global_queue(0, 0), ^(size_t i){
     std::vector<unsigned char> out;
     out.clear();
@@ -301,6 +307,16 @@ unsigned AutoChooseFilterStrategy(const std::vector<unsigned char>& image,
                                  &out);
     sizes[i] = error ? 0 : out.size();
   });
+#else
+  for (size_t i = 0; i < numstrategies; i++) {
+    std::vector<unsigned char> out;
+    out.clear();
+    unsigned error = TryOptimize(image, w, h, inputstate, bit16, keep_colortype,
+                                 origfile, strategies[i], false, windowsize, 0,
+                                 &out);
+    sizes[i] = error ? 0 : out.size();
+  }
+#endif
 
   for (int i = 1; i < numstrategies; i++) {
     if (sizes[i]==0) continue;

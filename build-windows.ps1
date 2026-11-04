@@ -323,36 +323,35 @@ cmake --build .build-win/mozjpeg --parallel $Jobs
 }
 
 function Build-Jpegoptim {
-    # jpegoptim's CMakeLists declares cmake_minimum_required(VERSION 2.8), which
-    # CMake 4 refuses outright, hence CMAKE_POLICY_VERSION_MINIMUM.
-    $lib = (Join-Path $RepoRoot '.build-win\mozjpeg\libjpeg.a')
-    if (-not (Test-Path $lib)) {
-        $found = Get-ChildItem (Join-Path $RepoRoot '.build-win\mozjpeg') -Filter 'libjpeg*.a' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($found) { $lib = $found.FullName }
-    }
-    if (-not (Test-Path $lib)) {
+    # Built directly rather than through the bundled CMakeLists, which globs
+    # every *.c and so compiles the vendored GNU getopt. That copy only builds
+    # under the autotools feature macros and fails on MinGW with "too many
+    # arguments to function getenv". MinGW supplies getopt_long itself, so
+    # HAVE_GETOPT_H and HAVE_GETOPT_LONG select the system one and getopt.c and
+    # getopt1.c are left out of the source list.
+    $libDir = Join-Path $RepoRoot '.build-win\mozjpeg'
+    $lib = Get-ChildItem $libDir -Filter 'libjpeg*.a' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $lib) {
+        Write-Host ''
         Write-Host '==> jpegoptim' -ForegroundColor Cyan
         Write-Host '    skipped: MozJPEG static library not built' -ForegroundColor Red
         $Results['jpegoptim'] = 'FAILED'
         return
     }
 
-    $incJpeg  = ConvertTo-MsysPath (Join-Path $RepoRoot 'libjpeg\src')
-    $incBuild = ConvertTo-MsysPath (Join-Path $RepoRoot '.build-win\mozjpeg')
-    $libMsys  = ConvertTo-MsysPath $lib
+    $incSrc = ConvertTo-MsysPath (Join-Path $RepoRoot 'libjpeg\src')
+    $incBuild = ConvertTo-MsysPath $libDir
+    $libMsys = ConvertTo-MsysPath $lib.FullName
 
     $code = Invoke-Step -Name 'jpegoptim' -Script @"
-cmake -G Ninja -S jpegoptim/src -B .build-win/jpegoptim \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    -DLIBJPEG_INCLUDE_DIR='$incJpeg;$incBuild' \
-    -DLIBJPEG_LIBRARY_DIR='$libMsys'
-cmake --build .build-win/jpegoptim --parallel $Jobs
-"@
+gcc -O3 -DHAVE_UNISTD_H=1 -DHAVE_GETOPT_H=1 -DHAVE_GETOPT_LONG=1 \
+    -I. -I'$incBuild' -I'$incSrc' \
+    -o jpegoptim.exe jpegoptim.c jpegdest.c misc.c '$libMsys' -lm
+"@ -WorkingDirectory (Join-Path $RepoRoot 'jpegoptim\src')
     if ($code -ne 0) { $Results['jpegoptim'] = 'FAILED'; return }
 
     Publish-Artifact -Tool 'jpegoptim' -TargetName 'jpegoptim.exe' -Candidates @(
-        '.build-win/jpegoptim/jpegoptim.exe'
+        'jpegoptim/src/jpegoptim.exe'
     ) | Out-Null
 }
 
@@ -369,7 +368,9 @@ if [ -f noautomake.sh ]; then sh noautomake.sh; fi
 if [ ! -f config.status ]; then
     ./configure --disable-dependency-tracking CFLAGS='-O2' CXXFLAGS='-O2'
 fi
-make -j$Jobs advpng
+# automake names the target with the executable suffix, so on Windows the rule
+# is advpng.exe and plain `advpng` has no rule at all.
+make -j$Jobs advpng.exe
 "@ -WorkingDirectory (Join-Path $RepoRoot 'advpng')
     if ($code -ne 0) { $Results['advpng'] = 'FAILED'; return }
 
