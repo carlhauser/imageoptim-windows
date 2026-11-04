@@ -3,6 +3,11 @@
 
 name: Tests
 
+# A newer push supersedes an older run rather than both compiling in parallel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
   push:
@@ -32,4 +37,9 @@ jobs:
       # optimizers, so nothing is spawned and no binaries are required.
       - name: Run the test suite
         working-directory: win
-        run: npm test
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee result.txt
+          grep -qE '^. tests [1-9]' result.txt \
+            || { echo '::error::no tests ran'; exit 1; }
+          rm -f result.txt

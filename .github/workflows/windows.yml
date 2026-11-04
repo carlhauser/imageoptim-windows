@@ -8,6 +8,11 @@
 
 name: Windows build
 
+# A newer push supersedes an older run rather than both compiling in parallel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
   push:
@@ -116,7 +121,18 @@ jobs:
       - name: Check the optimizers accept their arguments
         working-directory: win
         shell: bash
-        run: IMAGEOPTIM_BIN="$GITHUB_WORKSPACE/win/resources/bin" npm test
+        run: |
+          set -o pipefail
+          IMAGEOPTIM_BIN="$GITHUB_WORKSPACE/win/resources/bin" npm test 2>&1 | tee result.txt
+          # node --test exits 0 when it matches no files at all, so a glob that
+          # silently expanded to nothing used to pass this step with "tests 0".
+          grep -qE '^. tests [1-9]' result.txt \
+            || { echo '::error::no tests ran'; exit 1; }
+          # And the binary checks must not quietly skip for want of IMAGEOPTIM_BIN,
+          # which would leave the arguments unverified against the real builds.
+          grep -qE '^. skipped 0' result.txt \
+            || { echo '::error::tests were skipped; the optimizers were not found'; exit 1; }
+          rm -f result.txt
 
       - name: Build the installer
         working-directory: win
