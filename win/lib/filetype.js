@@ -44,4 +44,13 @@ function isSmall(type, byteSize) {
 
 const EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.svg'];
 
-module.exports = { PNG, JPEG, GIF, SVG, detectType, isLarge, isSmall, EXTENSIONS };
+const BY_EXTENSION = { '.png': PNG, '.jpg': JPEG, '.jpeg': JPEG, '.gif': GIF, '.svg': SVG };
+
+// What a file probably is before its header has been read: for estimating how
+// long a queued file will take, never for choosing optimizers.
+function typeFromExtension(filePath) {
+    const match = /\.[^.\\/]+$/.exec(filePath || '');
+    return (match && BY_EXTENSION[match[0].toLowerCase()]) || null;
+}
+
+module.exports = { PNG, JPEG, GIF, SVG, detectType, typeFromExtension, isLarge, isSmall, EXTENSIONS };

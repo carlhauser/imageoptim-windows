@@ -53,6 +53,17 @@ const DEFAULTS = {
     PreservePermissions: true,
     PreserveDates: false,
 
+    // Leave files alone that an earlier run already optimized at least as
+    // thoroughly as the current settings would (lib/history.js). Optimize
+    // Again always runs.
+    SkipOptimized: true,
+
+    // Before the first save, copy the untouched file into an "ImageOptim
+    // originals" folder beside it (lib/originals.js). Off by default: in place
+    // is what the app has always done, and the folder would otherwise turn up
+    // in web roots and repositories.
+    KeepOriginals: false,
+
     // How many optimizer processes may run at once, across every file. The
     // macOS app sizes its single worker queue by processor count; a fixed 4
     // left most of a modern machine idle while Zopfli - which is far and away

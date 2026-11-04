@@ -6,6 +6,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme } = requir
 
 const { Settings } = require('./lib/settings');
 const { Queue } = require('./lib/queue');
+const { History } = require('./lib/history');
 const { sweepTempDirs, releaseTempDir } = require('./lib/job');
 const updates = require('./lib/updater');
 
@@ -71,6 +72,7 @@ function filePathsFromArgv(argv, cwd = process.cwd()) {
 let mainWindow = null;
 let settings = null;
 let queue = null;
+let history = null;
 let updateController = null;
 
 // --bg in renderer/style.css, so the window does not flash a different colour
@@ -111,6 +113,34 @@ function send(channel, payload) {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(channel, payload);
     }
+}
+
+// The taskbar button fills up with the same fraction as the bar along the
+// bottom of the window. It pulses until there is anything to show.
+function showTaskbarProgress(batch) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!batch) mainWindow.setProgressBar(-1);
+    else if (batch.estimating && !batch.done) mainWindow.setProgressBar(0, { mode: 'indeterminate' });
+    else mainWindow.setProgressBar(Math.max(0.01, batch.fraction));
+}
+
+function sendProgress(stats) {
+    send('queue:progress', stats);
+    showTaskbarProgress(stats.batch);
+}
+
+// Once a second while files are being optimized, so the time left counts down
+// and each running row's line moves even while no file finishes.
+let heartbeat = null;
+
+function beat() {
+    if (!queue.isBusy()) {
+        clearInterval(heartbeat);
+        heartbeat = null;
+        return;
+    }
+    for (const job of queue.runningJobs()) send('job:change', job.toJSON());
+    sendProgress(queue.stats());
 }
 
 function buildMenu() {
@@ -237,6 +267,14 @@ function registerIpc() {
         return values;
     });
 
+    // Settings → Options → Files: how many files are remembered as optimized,
+    // and forgetting them all
+    ipcMain.handle('history:stats', () => ({ count: history.count() }));
+    ipcMain.handle('history:forget', () => {
+        history.forget();
+        return { count: 0 };
+    });
+
     ipcMain.handle('tools:list', () => ({
         binDir: queue.binDir,
         tools: queue.installedTools(),
@@ -346,10 +384,14 @@ app.whenReady().then(() => {
 
     settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
     applyTheme();
-    queue = new Queue({ settings, binDir: resolveBinDir() });
+    history = new History(path.join(app.getPath('userData'), 'optimized.jsonl')).load();
+    queue = new Queue({ settings, binDir: resolveBinDir(), history });
 
     queue.on('job', (snapshot) => send('job:change', snapshot));
-    queue.on('progress', (stats) => send('queue:progress', stats));
+    queue.on('progress', (stats) => {
+        sendProgress(stats);
+        if (queue.isBusy() && !heartbeat) heartbeat = setInterval(beat, 1000);
+    });
     queue.on('idle', (stats) => send('queue:idle', stats));
 
     registerIpc();

@@ -311,10 +311,12 @@ fixed lightnesses, so text keeps its contrast whichever colour is picked. The
 Theme setting there sets Electron's `nativeTheme.themeSource`, which drives
 `prefers-color-scheme` in the page and the native controls alike.
 
-The layout follows the window down to its 420 px minimum: toolbar labels give
-way to icons (each button keeps an `aria-label` and a tooltip), the list drops
-Best tool and then Size through container queries on its own width, and below
-720 px the settings panel overlays the list instead of squeezing it.
+One bar runs along the top: the list's Queue and Done tabs on the left, and the
+commands on the right as icons, each with an `aria-label` and a tooltip that
+names its menu shortcut. The layout follows the window down to its 420 px
+minimum: the tabs drop their names and keep their icons and counts, the list
+drops Best tool and then Size through container queries on its own width, and
+below 720 px the settings panel overlays the list instead of squeezing it.
 
 ## Saving safely
 
@@ -330,6 +332,25 @@ restores from there through the same atomic path. That directory is created with
 `mkdtemp`, swept at startup and removed at quit, and a job's backup is deleted
 when it leaves the list.
 
+With **Keep originals** on (Settings → Options, off by default) the copy goes
+into an `ImageOptim originals` folder beside the file instead, with the
+original's dates, and stays there. `lib/originals.js` holds the rules:
+
+* The copy is made before anything is written, and if it can't be made the save
+  is refused: a file is never overwritten without its copy.
+* Only files that actually got smaller are copied, so already-optimal files
+  leave no folder behind. A file this app produced itself (it is in the list of
+  optimized files below) is not copied again as if it were an original.
+* A same-named file already in the folder is never replaced: an identical one
+  is reused, a different one makes the copy `name (2).png`.
+* Clearing the list never deletes a kept original. Revert moves the copy back
+  over the file, which restores its exact bytes and dates, and removes the
+  folder once it is empty; it refuses if the copy has been changed or removed
+  since. A copy that was already there before the run is copied back and left
+  in place.
+* Folders named `ImageOptim originals` are never searched when a folder is
+  added, and a file inside one is listed with the reason it was left alone.
+
 ## Differences from the macOS app
 
 * **No PNGOUT.** It is a closed-source binary that ImageOptim downloads
@@ -340,15 +361,31 @@ when it leaves the list.
   carrying an unusual ICC profile may shift slightly.
 * **`PreservePermissions` only syncs the Unix mode bits.** Windows permissions
   live in the ACL, which survives the in-place write untouched.
-* **No results database.** The macOS app remembers hashes of files it has
-  already optimized across launches; here that memory lasts for the session.
+* **Already optimized files are remembered** across launches, as the macOS
+  app's results database does, but differently:
+  * Files are recognised by a SHA-256 of their content. A second key, a hash
+    of path, size and modification time, recognises an unchanged file without
+    reading it.
+  * The list is a plain `optimized.jsonl` in the app's user-data folder.
+    Neither key can be turned back into a file name, so nothing in it says
+    where anyone's files are. It keeps the newest 50,000 files.
+  * Each entry records how thoroughly the file was done: effort level, lossy,
+    metadata stripping, thorough PNG and Guetzli. A file counts as optimized
+    only if it was done at least as thoroughly as the current settings would.
+  * Results that got smaller are recorded too, not only files no tool could
+    improve.
+
+  **Skip files already optimized** (Settings → Options, on by default) and
+  **Forget** are under Optimized files. Optimize Again always runs.
 * **Revert** keeps a copy of each original in the temp directory for the
   lifetime of the session, so it does not depend on the Recycle Bin.
 
 ## Using it
 
-Drop files or folders onto the window, or use Add Files / Add Folder. Folders are
-scanned recursively for PNG, JPEG, GIF and SVG.
+Drop files or folders onto the window, or use the first two buttons on the right
+of the toolbar (Add files, Add a folder). Folders are scanned recursively for
+PNG, JPEG, GIF and SVG. A file that an earlier run already optimized - in this
+session or a past one - goes straight to Done as "already optimized".
 
 The list has two tabs. **Queue** holds files waiting or being optimized;
 **Done** holds the finished ones - optimized, already optimal, failed, reverted
@@ -356,15 +393,36 @@ or stopped. Adding files brings Queue to the front, and the window switches to
 Done when the last file in the queue finishes. Switching tabs clears the
 selection, so Delete and Ctrl+Z never act on rows out of sight.
 
+While files are queued, a bar along the top of the status bar and the
+taskbar button fill up, and the status bar says how many files are done and
+about how long is left. `lib/eta.js` works this out:
+
+* The time is learned while the files run, not assumed from size alone. A
+  small PNG that Zopfli works on can take longer than a far larger one that
+  only OxiPNG sees, and smallest-first order finishes exactly those
+  expensive-per-byte files first.
+* Durations are therefore fitted per cost class: the format plus Zopfli,
+  Guetzli or lossy. Each class gets its own line, time = a + b × size, after
+  three files, and time in proportion to size before that.
+* The time left is spread over the workers that run at once, but is never
+  shorter than the slowest running file's remainder.
+* A file that runs past its estimate is taken to have half its time so far
+  still to go.
+* The finish time is smoothed, so the countdown neither jumps as files finish
+  nor stalls between them.
+* Each running row has a line along its bottom over a faint track that shows
+  where it ends. It follows the same estimate and never moves backwards.
+
 | | |
 | --- | --- |
 | Double-click a row | show the file in Explorer |
 | Delete | remove the selected rows from the list |
 | Ctrl+Z | revert the selected files to their originals |
-| Ctrl+R | optimize everything again, one effort level higher |
+| Ctrl+R | optimize everything again, one effort level higher, already optimized files included |
 | Ctrl+. | stop |
 
-Files are overwritten in place. Keep a copy of anything you cannot regenerate.
+Files are overwritten in place. Turn on Keep originals, or keep a copy of
+anything you cannot regenerate.
 
 ## Updates
 
@@ -490,6 +548,9 @@ win/
   lib/tools.js          one entry per optimizer, with its exact arguments
   lib/job.js            per-image plan, execution and saving
   lib/queue.js          folder scanning, concurrency, totals
+  lib/eta.js            the progress bar and time left
+  lib/history.js        files already optimized, across launches
+  lib/originals.js      Keep originals
   lib/updater.js        the self-updater: see Updates
   renderer/             the window itself
   resources/bin/        the built executables (created by the build script)

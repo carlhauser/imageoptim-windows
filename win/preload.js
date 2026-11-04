@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld('imageoptim', {
     setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
     resetSettings: () => ipcRenderer.invoke('settings:reset'),
     listTools: () => ipcRenderer.invoke('tools:list'),
+    historyStats: () => ipcRenderer.invoke('history:stats'),
+    forgetHistory: () => ipcRenderer.invoke('history:forget'),
 
     // The update banner. The renderer only names an action; the main process
     // decides whether it is allowed (no restart mid-run) and which URL to open.

@@ -7,8 +7,11 @@ const { EventEmitter } = require('events');
 
 const { Job } = require('./job');
 const { Semaphore } = require('./semaphore');
+const { BatchTracker, describeBatch } = require('./eta');
 const tools = require('./tools');
 const { EXTENSIONS } = require('./filetype');
+const { statKey, profileFor, satisfies } = require('./history');
+const { isOriginalsDir, isInOriginals, ORIGINALS_DIR } = require('./originals');
 
 const EXE_SUFFIX = process.platform === 'win32' ? '.exe' : '';
 
@@ -82,6 +85,8 @@ async function expandPaths(inputPaths, limit = 20000) {
             }
             for (const entry of entries) {
                 if (entry.name.startsWith('.')) continue;
+                // Kept originals are never optimized (Keep originals)
+                if (entry.isDirectory() && isOriginalsDir(entry.name)) continue;
                 pending.push(path.join(current, entry.name));
             }
             continue;
@@ -111,6 +116,17 @@ class Queue extends EventEmitter {
         this.controller = null;
         this.controllers = new Map(); // job id -> AbortController, for per-job stop
         this.semaphore = new Semaphore(this.workerLimit());
+        this.now = options.now || Date.now;
+        this.history = options.history || null;
+        // Time left for the files queued since the queue was last empty
+        this.batch = new BatchTracker({ now: this.now });
+    }
+
+    // Puts a job at the back of the queue and into the current batch
+    enqueue(job) {
+        this.pending.push(job);
+        job.setState('queued');
+        this.batch.enqueue(job.filePath, job.costClass(this.settings.all()), job.bestSize || job.originalSize);
     }
 
     // Reports which optimizers are actually present, for the UI to show.
@@ -135,9 +151,23 @@ class Queue extends EventEmitter {
         for (const filePath of files) {
             let job = this.jobs.get(filePath);
             if (!job) {
-                job = new Job(filePath, { resolveTool: this.resolveTool, semaphore: this.semaphore });
+                job = new Job(filePath, {
+                    resolveTool: this.resolveTool,
+                    semaphore: this.semaphore,
+                    estimate: (estimated) => this.batch.jobFraction(estimated.filePath),
+                    history: this.history,
+                });
                 job.on('change', (snapshot) => this.emit('job', snapshot));
                 this.jobs.set(filePath, job);
+                if (isInOriginals(filePath)) {
+                    // Dropped in directly, or a whole originals folder dropped:
+                    // shown, so it's clear why nothing happened to it
+                    job.unreadable = true;
+                    job.blocked = true;
+                    job.setState('error', `In “${ORIGINALS_DIR}”, so left as it is`);
+                    added.push(job);
+                    continue;
+                }
                 try {
                     job.originalSize = fs.statSync(filePath).size;
                     job.bestSize = job.originalSize;
@@ -151,8 +181,13 @@ class Queue extends EventEmitter {
             // Queueing a job that is already pending or mid-run would give two
             // concurrent runs over one file, racing in save().
             if (!job.unreadable && !job.isRunning && !this.pending.includes(job)) {
-                this.pending.push(job);
-                job.setState('queued');
+                // A result from this session stays on show; a file first seen
+                // now goes straight to Done.
+                if (this.remembered(job)) {
+                    if (job.state !== 'done') job.markSkipped();
+                } else {
+                    this.enqueue(job);
+                }
             }
         }
 
@@ -165,6 +200,19 @@ class Queue extends EventEmitter {
 
     snapshot() {
         return [...this.jobs.values()].map((job) => job.toJSON());
+    }
+
+    // Optimized before and not changed since, recognised from its directory
+    // entry alone. Anything less certain is left to the job, which hashes the
+    // content before it starts work.
+    remembered(job) {
+        if (!this.history || !this.settings.get('SkipOptimized')) return false;
+        try {
+            const entry = this.history.findByStat(statKey(job.filePath, fs.statSync(job.filePath)));
+            return satisfies(entry, profileFor(entry && entry.t, this.settings.all()));
+        } catch (err) {
+            return false;
+        }
     }
 
     // Reorders what has not started yet. Jobs already running are left alone.
@@ -207,11 +255,19 @@ class Queue extends EventEmitter {
             this.controllers.set(job.filePath, perJob);
             const signal = AbortSignal.any([this.controller.signal, perJob.signal]);
 
+            this.batch.started(job.filePath);
+
             job.run(this.settings.all(), signal)
                 .catch((err) => job.setState('error', err.message))
                 .finally(() => {
                     this.controllers.delete(job.filePath);
                     this.running -= 1;
+                    this.batch.finished(job.filePath, {
+                        learn: job.state === 'done' && job.toolsTotal > 0 && !signal.aborted,
+                        cls: job.costClassName,
+                        bytes: job.costBytes,
+                    });
+                    if (!this.pending.length && this.running === 0) this.batch.end();
                     this.emit('progress', this.stats());
                     if (this.pending.length) {
                         this.pump();
@@ -225,7 +281,11 @@ class Queue extends EventEmitter {
     }
 
     stop() {
+        // Files still waiting are stopped too, so they leave the Queue tab
+        // along with the ones that were running.
+        for (const job of this.pending) job.setState('stopped');
         this.pending.length = 0;
+        this.batch.end();
         if (this.controller) this.controller.abort();
         for (const controller of this.controllers.values()) controller.abort();
         this.emit('progress', this.stats());
@@ -250,6 +310,7 @@ class Queue extends EventEmitter {
             const controller = this.controllers.get(id);
             if (controller) controller.abort();
             this.pending = this.pending.filter((pendingJob) => pendingJob !== job);
+            this.batch.drop(id);
             this.jobs.delete(id);
             if (!job.isRunning) job.cleanup();
         }
@@ -260,9 +321,9 @@ class Queue extends EventEmitter {
     // when the optimizer preferences change.
     again() {
         for (const job of this.jobs.values()) {
-            if (job.isRunning || this.pending.includes(job)) continue;
-            this.pending.push(job);
-            job.setState('queued');
+            if (job.isRunning || this.pending.includes(job) || job.blocked) continue;
+            job.force = true;
+            this.enqueue(job);
         }
         this.sortPending();
         this.start();
@@ -282,30 +343,45 @@ class Queue extends EventEmitter {
         return this.running > 0 || this.pending.length > 0;
     }
 
+    runningJobs() {
+        return [...this.jobs.values()].filter((job) => job.state === 'running');
+    }
+
     stats() {
         let originalTotal = 0;
         let bestTotal = 0;
         let optimized = 0;
         let busy = 0;
+        let skipped = 0;
 
         for (const job of this.jobs.values()) {
             originalTotal += job.originalSize;
             bestTotal += job.bestSize || job.originalSize;
             if (job.isOptimized) optimized += 1;
             if (job.state === 'running' || job.state === 'queued') busy += 1;
+            if (job.state === 'skipped') skipped += 1;
         }
 
         return {
             files: this.jobs.size,
             optimized,
             busy,
+            skipped,
             running: this.running,
             queued: this.pending.length,
             originalTotal,
             bestTotal,
             savedBytes: Math.max(0, originalTotal - bestTotal),
             savedPercent: originalTotal ? Math.max(0, (1 - bestTotal / originalTotal) * 100) : 0,
+            batch: this.batchProgress(),
         };
+    }
+
+    // The progress bar and time left: null while nothing is queued
+    batchProgress() {
+        if (!this.isBusy() || !this.batch.active) return null;
+        const snapshot = this.batch.snapshot(this.workerLimit());
+        return snapshot && { ...snapshot, ...describeBatch(snapshot) };
     }
 }
 

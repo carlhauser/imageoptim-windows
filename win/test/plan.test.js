@@ -117,3 +117,41 @@ test('repeat runs raise the effort level', () => {
     assert.ok(!first.all.includes('pngcrush'), 'level 1 drops pngcrush');
     assert.ok(second.all.includes('pngcrush'), 'level 2 keeps it');
 });
+
+// The time-left estimate groups files by how long they take (lib/eta.js), and
+// what decides that is whether Zopfli or Guetzli runs. costClass must agree
+// with the plan about both.
+test('costClass names the slow optimizers that planTools picks', () => {
+    const cases = [
+        ['png', { size: 100 * 1024 }, {}],
+        ['png', { size: 300 * 1024 }, {}],
+        ['png', { size: 300 * 1024 }, { ThoroughPng: true }],
+        ['png', { size: 100 * 1024 }, { ZopfliEnabled: false }],
+        ['jpeg', { size: 4096 }, { GuetzliEnabled: true }],
+        ['jpeg', { size: 4096, runCount: 1 }, { GuetzliEnabled: true }],
+        ['jpeg', { size: 4096 }, { GuetzliEnabled: true, JpegOptimMaxQuality: 70 }],
+    ];
+    for (const [type, { size, runCount = 0 }, overrides] of cases) {
+        const job = new Job(makeFile(`cls-${Math.random().toString(16).slice(2)}.${type}`, type, size), {
+            resolveTool: () => ({ exe: '/fake/tool' }),
+        });
+        job.type = type;
+        job.bestSize = size;
+        job.originalSize = size;
+        job.runCount = runCount;
+        const settings = { ...DEFAULTS, ...overrides };
+        const { runFirst, runLater } = job.planTools(settings);
+        const ids = [...runFirst, ...runLater].map((s) => s.tool.id);
+        const cls = job.costClass(settings).split('+');
+        const label = `${type} ${size} ${JSON.stringify(overrides)} run ${runCount}`;
+        assert.strictEqual(cls[0], type, label);
+        assert.strictEqual(cls.includes('zopfli'), ids.includes('zopflipng'), label);
+        assert.strictEqual(cls.includes('guetzli'), ids.includes('guetzli'), label);
+    }
+});
+
+test('costClass guesses the type from the extension before the header is read', () => {
+    const job = new Job('C:\photos\Holiday.JPEG', { resolveTool: () => null });
+    job.originalSize = 1000;
+    assert.strictEqual(job.costClass({ ...DEFAULTS, LossyEnabled: true }), 'jpeg+lossy');
+});

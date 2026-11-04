@@ -116,3 +116,60 @@ test('again() does not queue a job that is already pending', async () => {
     queue.again();
     assert.strictEqual(queue.pending.length, 1);
 });
+
+test('stats() reports the batch, its time left and each row\'s progress', async () => {
+    const { Job } = require('../lib/job');
+    const root = tree('batch', (r) => {
+        for (const name of ['a.svg', 'b.svg', 'c.svg']) fs.writeFileSync(path.join(r, name), '<svg/>'.repeat(20));
+    });
+    const settings = new Settings(path.join(scratch(), 'batch.json'));
+    settings.reset();
+    settings.update({ MaxWorkers: 1 });
+    const clock = { t: 0 };
+    const queue = new Queue({ settings, binDir: path.join(scratch(), 'nobin'), now: () => clock.t });
+
+    // Each run waits until the test finishes it
+    const finishers = [];
+    const realRun = Job.prototype.run;
+    Job.prototype.run = function run() {
+        this.setState('running');
+        return new Promise((resolve) => finishers.push(() => {
+            this.toolsTotal = 1;
+            this.costClassName = this.costClass(settings.all());
+            this.costBytes = this.originalSize;
+            this.setState('done');
+            resolve();
+        }));
+    };
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+    try {
+        await queue.add([root]);
+        let batch = queue.stats().batch;
+        assert.strictEqual(batch.total, 3);
+        assert.strictEqual(batch.done, 0);
+        assert.strictEqual(batch.estimating, true);
+        assert.strictEqual(batch.text, '0 of 3 done · estimating time left…');
+
+        clock.t += 2000;
+        finishers.shift()();
+        await settle();
+        batch = queue.stats().batch;
+        assert.strictEqual(batch.done, 1);
+        assert.strictEqual(batch.estimating, false);
+        assert.strictEqual(batch.remainingMs, 4000, 'two more of 2 s each, one at a time');
+
+        // The running row's line follows the clock
+        clock.t += 1000;
+        const [running] = queue.runningJobs();
+        assert.ok(Math.abs(running.toJSON().progress - 0.5) < 1e-9);
+
+        finishers.shift()();
+        await settle();
+        finishers.shift()();
+        await settle();
+        assert.strictEqual(queue.stats().batch, null, 'no batch once the queue is empty');
+        assert.strictEqual(queue.isBusy(), false);
+    } finally {
+        Job.prototype.run = realRun;
+    }
+});
