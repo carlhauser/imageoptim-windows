@@ -50,8 +50,8 @@ with MinGW-w64 under MSYS2, and `win/` packages the app around them. See
 [`win/README.md`](win/README.md) for the detail, including how the optimizer
 plans and the Zopfli size threshold were derived.
 
-The screenshots above were themselves optimized by this build: 33.1% smaller,
-Zopfli winning all three.
+The screenshots above were taken on Windows 11 from a real run, and were
+themselves optimized by this build: 37.1% smaller, Zopfli winning all three.
 
 ---
 
