@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Before ninety minutes of compiling rather than after: the updater
       # compares versions from latest.yml, which comes from package.json, so a
@@ -72,7 +72,7 @@ jobs:
           toolchain: stable
           targets: x86_64-pc-windows-gnu
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
 
@@ -87,7 +87,7 @@ jobs:
       # at all - silently, since a missing optimizer is simply skipped.
       - name: Upload the built optimizers
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: optimizers-win-x64
           path: |
@@ -103,9 +103,9 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -115,7 +115,7 @@ jobs:
       # app runs with whatever did build, so packaging should still be attempted.
       - name: Collect the optimizers built in the previous job
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: optimizers-win-x64
           path: win/resources/
@@ -175,7 +175,7 @@ jobs:
       # download.
       - name: Upload the installer and portable zip
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: imageoptim-windows
           path: |
@@ -205,7 +205,7 @@ jobs:
 
     steps:
       - name: Collect the installer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: imageoptim-windows
           path: dist
