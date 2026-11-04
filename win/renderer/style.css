@@ -148,6 +148,8 @@ body {
 .i-theme-system { --icon: url(icons/theme-system.svg); }
 .i-theme-light { --icon: url(icons/theme-light.svg); }
 .i-theme-dark { --icon: url(icons/theme-dark.svg); }
+.i-queue { --icon: url(icons/state-queued.svg); }
+.i-done { --icon: url(icons/state-unchanged.svg); }
 
 /* ------------------------------------------------------------------ buttons */
 
@@ -257,7 +259,52 @@ main {
     flex: 1 1 auto;
     min-width: 0;
     display: flex;
+    flex-direction: column;
     container-type: inline-size;
+}
+
+/* The table and the hint that covers it when the current view is empty */
+.list-body {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+}
+
+/* Queue / Done: each view shows only its own rows (app.js keeps the counts).
+   #file-table in each selector, to outrank `#file-table tr { display: table }`. */
+.list-pane[data-view="queue"] #file-table tbody tr:not([data-state="queued"]):not([data-state="running"]),
+.list-pane[data-view="done"] #file-table tbody tr[data-state="queued"],
+.list-pane[data-view="done"] #file-table tbody tr[data-state="running"] {
+    display: none;
+}
+
+/* .tabs.list-tabs, to outrank the settings tabs' rules further down */
+.tabs.list-tabs {
+    align-self: flex-start;
+    margin: 10px 12px 4px;
+}
+
+.tabs.list-tabs [role="tab"] {
+    flex: none;
+    padding: 0 8px 0 12px;
+}
+
+.count {
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 9px;
+    font-size: 11px;
+    line-height: 18px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-dim);
+    background: var(--control-hover);
+}
+
+.list-tabs [aria-selected="true"] .count {
+    color: var(--accent);
+    background: color-mix(in oklch, var(--accent) 16%, transparent);
 }
 
 #file-table {

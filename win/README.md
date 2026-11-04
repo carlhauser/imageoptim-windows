@@ -285,6 +285,12 @@ when it leaves the list.
 Drop files or folders onto the window, or use Add Files / Add Folder. Folders are
 scanned recursively for PNG, JPEG, GIF and SVG.
 
+The list has two tabs. **Queue** holds files waiting or being optimized;
+**Done** holds the finished ones - optimized, already optimal, failed, reverted
+or stopped. Adding files brings Queue to the front, and the window switches to
+Done when the last file in the queue finishes. Switching tabs clears the
+selection, so Delete and Ctrl+Z never act on rows out of sight.
+
 | | |
 | --- | --- |
 | Double-click a row | show the file in Explorer |

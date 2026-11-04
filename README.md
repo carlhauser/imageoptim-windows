@@ -13,9 +13,11 @@ same per-format plans and the same command-line arguments.
 ## ImageOptim for Windows
 
 Drop files or folders in; each image is optimized in place and the smallest
-result of every applicable optimizer is kept.
+result of every applicable optimizer is kept. Files waiting or being optimized
+are under **Queue**; each one moves to **Done** as it finishes, and the window
+switches to Done when the queue runs out.
 
-![The file list after a run, showing per-file savings and which optimizer won](docs/screenshots/results-light.png)
+![The Done list after a run, showing per-file savings and which optimizer won](docs/screenshots/results-light.png)
 
 Light and dark follow the system setting, or can be fixed under Settings →
 Appearance.
@@ -67,7 +69,7 @@ with MinGW-w64 under MSYS2, and `win/` packages the app around them. See
 plans and the Zopfli size threshold were derived.
 
 The screenshots above were taken on Windows 11 from a real run, and were
-themselves optimized by this build: 37.2% smaller, Zopfli winning all four.
+themselves optimized by this build: 37.3% smaller, Zopfli winning all four.
 
 ---
 

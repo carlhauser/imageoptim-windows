@@ -39,24 +39,37 @@
     </header>
 
     <main>
-        <div class="list-pane">
-            <table id="file-table">
-                <thead>
-                    <tr>
-                        <th class="col-name">Name</th>
-                        <th class="col-size">Size</th>
-                        <th class="col-savings">Savings</th>
-                        <th class="col-tool">Best tool</th>
-                    </tr>
-                </thead>
-                <tbody id="file-rows"></tbody>
-            </table>
+        <div class="list-pane" data-view="queue">
+            <!-- Files waiting or being optimized, and files that are finished
+                 (optimized, already optimal, failed, reverted or stopped). -->
+            <div class="tabs list-tabs" role="tablist" aria-label="Files">
+                <button type="button" role="tab" id="view-queue" data-view="queue" aria-controls="file-table" aria-selected="true">
+                    <span class="icon i-queue" aria-hidden="true"></span>Queue<span class="count" id="count-queue">0</span>
+                </button>
+                <button type="button" role="tab" id="view-done" data-view="done" aria-controls="file-table" aria-selected="false" tabindex="-1">
+                    <span class="icon i-done" aria-hidden="true"></span>Done<span class="count" id="count-done">0</span>
+                </button>
+            </div>
 
-            <div id="empty-state">
-                <span class="empty-art" aria-hidden="true"><span class="icon i-empty"></span></span>
-                <p class="empty-title">Drop images here</p>
-                <p class="empty-hint">PNG, JPEG, GIF and SVG files, or whole folders.<br>
-                   Files are optimized and overwritten in place.</p>
+            <div class="list-body">
+                <table id="file-table">
+                    <thead>
+                        <tr>
+                            <th class="col-name">Name</th>
+                            <th class="col-size">Size</th>
+                            <th class="col-savings">Savings</th>
+                            <th class="col-tool">Best tool</th>
+                        </tr>
+                    </thead>
+                    <tbody id="file-rows"></tbody>
+                </table>
+
+                <div id="empty-state">
+                    <span class="empty-art" aria-hidden="true"><span class="icon i-empty"></span></span>
+                    <p class="empty-title">Drop images here</p>
+                    <p class="empty-hint">PNG, JPEG, GIF and SVG files, or whole folders.<br>
+                       Files are optimized and overwritten in place.</p>
+                </div>
             </div>
         </div>
 

@@ -70,7 +70,7 @@ function renderRow(job) {
     tr.classList.toggle('selected', selection.has(job.id));
     tr.style.setProperty('--progress', `${Math.round((job.progress || 0) * 100)}%`);
 
-    emptyEl.classList.toggle('hidden', rows.size > 0);
+    updateViews();
 }
 
 function removeRow(id) {
@@ -78,7 +78,78 @@ function removeRow(id) {
     if (tr) tr.remove();
     rows.delete(id);
     selection.delete(id);
-    emptyEl.classList.toggle('hidden', rows.size > 0);
+    updateViews();
+}
+
+// --------------------------------------------------------- queue / done views
+
+// Queue holds what is waiting or being optimized; Done everything finished,
+// whether optimized, already optimal, failed, reverted or stopped. Which rows
+// show is decided by style.css from the pane's data-view and each row's
+// data-state; this keeps the counts and the empty-state text right.
+const listPaneEl = document.querySelector('.list-pane');
+const viewTabs = [...document.querySelectorAll('.list-tabs [role="tab"]')];
+const emptyTitleEl = emptyEl.querySelector('.empty-title');
+const emptyHintEl = emptyEl.querySelector('.empty-hint');
+const emptyText = { title: emptyTitleEl.textContent, hint: emptyHintEl.innerHTML };
+let lastQueued = 0;
+
+const isQueued = (state) => state === 'queued' || state === 'running';
+
+function showView(view, focus = false) {
+    if (listPaneEl.dataset.view !== view) {
+        // Rows hidden by the other view must not stay selected, or Delete and
+        // Ctrl+Z would act on files that are out of sight.
+        selection.clear();
+        for (const tr of rows.values()) tr.classList.remove('selected');
+    }
+    listPaneEl.dataset.view = view;
+    for (const tab of viewTabs) {
+        const selected = tab.dataset.view === view;
+        tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        if (selected && focus) tab.focus();
+    }
+    updateViews();
+}
+
+function updateViews() {
+    let queued = 0;
+    for (const tr of rows.values()) if (isQueued(tr.dataset.state)) queued += 1;
+    const done = rows.size - queued;
+    document.getElementById('count-queue').textContent = queued;
+    document.getElementById('count-done').textContent = done;
+
+    // Follow the work: new files bring the queue to the front, and when the
+    // last one finishes the results take its place.
+    const view = listPaneEl.dataset.view;
+    if (queued > 0 && lastQueued === 0 && view !== 'queue') { lastQueued = queued; showView('queue'); return; }
+    if (queued === 0 && lastQueued > 0 && done > 0 && view !== 'done') { lastQueued = 0; showView('done'); return; }
+    lastQueued = queued;
+
+    const shown = view === 'queue' ? queued : done;
+    emptyEl.classList.toggle('hidden', shown > 0);
+    if (rows.size === 0) {
+        emptyTitleEl.textContent = emptyText.title;
+        emptyHintEl.innerHTML = emptyText.hint;
+    } else if (view === 'queue') {
+        emptyTitleEl.textContent = 'Nothing in the queue';
+        emptyHintEl.textContent = 'Finished files are under Done. Drop more images to optimize them.';
+    } else {
+        emptyTitleEl.textContent = 'Nothing finished yet';
+        emptyHintEl.textContent = 'Files move here as soon as their optimization completes.';
+    }
+}
+
+for (const tab of viewTabs) {
+    tab.addEventListener('click', () => showView(tab.dataset.view));
+    tab.addEventListener('keydown', (event) => {
+        const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+        if (!step) return;
+        event.preventDefault();
+        const next = viewTabs[(viewTabs.indexOf(tab) + step + viewTabs.length) % viewTabs.length];
+        showView(next.dataset.view, true);
+    });
 }
 
 function renderAll(jobs) {
