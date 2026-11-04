@@ -1,0 +1,100 @@
+# Builds the optimizers from source on a real Windows machine, then packages the
+# app around them. Until this ran, build-windows.ps1 had never been executed
+# anywhere: it was written on a Mac and only reasoned about.
+#
+# Deliberately not run on every push. The from-source build compiles MozJPEG,
+# libpng, Guetzli and three Rust crates, and Windows runners bill at twice the
+# rate of Linux ones.
+
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'build-windows.ps1'
+      - 'win/**'
+      - '.github/workflows/windows.yml'
+
+jobs:
+  optimizers:
+    name: Build optimizers from source
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show what the runner already has
+        shell: pwsh
+        run: |
+          Write-Host "MSYS2 at C:\msys64: $(Test-Path 'C:\msys64\usr\bin\bash.exe')"
+          Write-Host "processors: $([Environment]::ProcessorCount)"
+          foreach ($t in 'cargo', 'rustup', 'node', 'npm', 'cmake') {
+            $c = Get-Command $t -ErrorAction SilentlyContinue
+            Write-Host ("{0,-8} {1}" -f $t, $(if ($c) { $c.Source } else { 'not found' }))
+          }
+
+      # A current cargo, so the Rust tools are not left to whatever MSYS2 ships.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build the optimizers
+        shell: pwsh
+        run: .\build-windows.ps1
+
+      # Wanted even on a partial build: the summary says which tools failed, and
+      # the app runs with whatever did build.
+      - name: Upload the built optimizers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimizers-win-x64
+          path: win/resources/bin/
+          if-no-files-found: warn
+
+  package:
+    name: Package the app
+    runs-on: windows-latest
+    needs: optimizers
+    if: always()
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: win/package-lock.json
+
+      - name: Collect the optimizers built in the previous job
+        uses: actions/download-artifact@v4
+        with:
+          name: optimizers-win-x64
+          path: win/resources/bin/
+
+      - name: Install dependencies
+        working-directory: win
+        run: npm ci
+
+      - name: Build the installer
+        working-directory: win
+        run: npm run dist:win
+
+      - name: Upload the installer and portable zip
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: imageoptim-windows
+          path: |
+            win/dist/*.exe
+            win/dist/*.zip
+          if-no-files-found: warn

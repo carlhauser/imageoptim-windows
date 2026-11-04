@@ -77,11 +77,15 @@ $AllTools = @(
 # jpegoptim links against the MozJPEG static library, so asking for jpegoptim
 # alone has to pull MozJPEG in with it.
 $Targets = if ($Only.Count) { $Only } else { $AllTools }
-if (($Targets -contains 'jpegoptim') -and -not ($Targets -contains 'mozjpeg')) {
-    $Targets = @('mozjpeg') + $Targets
-}
-if (($Targets -contains 'pngcrush') -and -not ($Targets -contains 'libpng')) {
-    $Targets = @('libpng') + $Targets
+# jpegoptim links MozJPEG's static library and pngcrush links libpng's, so those
+# have to be built first. Moving the dependency to the front rather than only
+# adding it when absent: -Only jpegoptim,mozjpeg used to keep the given order and
+# fail.
+foreach ($pair in @(@('jpegoptim', 'mozjpeg'), @('pngcrush', 'libpng'))) {
+    $dependent, $dependency = $pair
+    if ($Targets -contains $dependent) {
+        $Targets = @($dependency) + ($Targets | Where-Object { $_ -ne $dependency })
+    }
 }
 foreach ($t in $Targets) {
     if ($AllTools -notcontains $t) {
@@ -90,6 +94,10 @@ foreach ($t in $Targets) {
 }
 
 $Results = [ordered]@{}
+
+# Windows directories to prepend inside the MinGW shell: just the toolchains that
+# live outside MSYS2, such as rustup's cargo and Node.
+$ExtraPathDirs = New-Object System.Collections.Generic.List[string]
 
 # ---------------------------------------------------------------- MSYS2 plumbing
 
@@ -119,12 +127,21 @@ function Invoke-Mingw {
     )
 
     $msysCwd = ConvertTo-MsysPath $WorkingDirectory
-    $full    = "set -euo pipefail; cd '$msysCwd'; $Script"
 
-    $env:MSYSTEM        = 'MINGW64'
-    $env:CHERE_INVOKING = '1'
-    # Keep the Windows PATH visible so rustup, cargo and node stay reachable.
-    $env:MSYS2_PATH_TYPE = 'inherit'
+    # Only the directories we actually need are added, rather than the whole
+    # Windows PATH. Inheriting it is the classic way to break a MinGW build:
+    # Strawberry Perl's gcc, Windows cmake.exe, sh.exe and link.exe all shadow
+    # the MSYS2 tools.
+    $prefix = ''
+    if ($script:ExtraPathDirs.Count) {
+        $converted = $script:ExtraPathDirs | ForEach-Object { ConvertTo-MsysPath $_ }
+        $prefix = "export PATH='$($converted -join ':')':`$PATH; "
+    }
+    $full = "${prefix}set -euo pipefail; cd '$msysCwd'; $Script"
+
+    $env:MSYSTEM         = 'MINGW64'
+    $env:CHERE_INVOKING  = '1'
+    $env:MSYS2_PATH_TYPE = 'minimal'
 
     # Send the build log straight to the console; otherwise it joins this
     # function's output stream and the caller gets an array instead of a code.
@@ -199,8 +216,13 @@ function Install-Dependencies {
         'mingw-w64-x86_64-gflags'
     ) -join ' '
 
+    # pacman -Sy on its own is a partial upgrade, which MSYS2 documents as a way
+    # to corrupt an installation. The database and the installed packages have to
+    # move together, and on a stale install the first -Syu may replace pacman
+    # itself and stop early, so it runs twice.
     $code = Invoke-Step -Name 'Installing MSYS2 build dependencies' -Script @"
-pacman -Sy --noconfirm --needed $packages
+pacman -Syu --noconfirm || pacman -Syu --noconfirm
+pacman -S --noconfirm --needed $packages
 "@
     if ($code -ne 0) { throw 'pacman failed; fix the package installation and re-run.' }
 }
@@ -209,11 +231,18 @@ pacman -Sy --noconfirm --needed $packages
 # Everything else here is MinGW, so Rust must target x86_64-pc-windows-gnu to
 # keep one ABI across the whole bin directory.
 function Resolve-Cargo {
+    # Whichever toolchain wins has to be the one actually on PATH inside the
+    # MinGW shell, so the chosen cargo's directory is registered rather than
+    # merely reported.
+    $cargo = Get-Command cargo -ErrorAction SilentlyContinue
     $rustup = Get-Command rustup -ErrorAction SilentlyContinue
-    if ($rustup) {
-        Write-Host "    using rustup at $($rustup.Source)" -ForegroundColor DarkGray
-        & rustup target add x86_64-pc-windows-gnu | Out-Null
-        return 'cargo'
+
+    if ($cargo -and $rustup) {
+        $dir = Split-Path $cargo.Source -Parent
+        Write-Host "    using rustup's cargo at $dir" -ForegroundColor DarkGray
+        & rustup target add x86_64-pc-windows-gnu 2>&1 | Out-Host
+        $script:ExtraPathDirs.Insert(0, $dir)
+        return
     }
 
     Write-Host '    rustup not found; installing MSYS2 Rust' -ForegroundColor DarkGray
@@ -225,7 +254,13 @@ No Rust toolchain available. Install rustup from https://rustup.rs/ (then run
 mingw-w64-x86_64-rust, and re-run this script.
 "@
     }
-    return 'cargo'
+}
+
+# Node is only needed if svgo's bundle has to be rebuilt, but the MinGW shell has
+# no Node of its own, so make it reachable when it exists.
+function Register-NodePath {
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if ($node) { $script:ExtraPathDirs.Add((Split-Path $node.Source -Parent)) }
 }
 
 # ----------------------------------------------------------------- tool builds
@@ -246,7 +281,7 @@ cmake --build .build-win/libpng --parallel $Jobs
 "@
     if ($code -ne 0) { $Results['libpng'] = 'FAILED'; return }
 
-    $lib = Get-ChildItem (Join-Path $RepoRoot '.build-win\libpng') -Filter 'libpng*.a' -ErrorAction SilentlyContinue |
+    $lib = Get-ChildItem (Join-Path $RepoRoot '.build-win\libpng') -Filter 'libpng*.a' -Recurse -ErrorAction SilentlyContinue |
            Select-Object -First 1
     if (-not $lib) {
         Write-Host '    libpng built but no static library was found' -ForegroundColor Red
@@ -282,7 +317,7 @@ function Build-Jpegoptim {
     # CMake 4 refuses outright, hence CMAKE_POLICY_VERSION_MINIMUM.
     $lib = (Join-Path $RepoRoot '.build-win\mozjpeg\libjpeg.a')
     if (-not (Test-Path $lib)) {
-        $found = Get-ChildItem (Join-Path $RepoRoot '.build-win\mozjpeg') -Filter 'libjpeg*.a' -ErrorAction SilentlyContinue | Select-Object -First 1
+        $found = Get-ChildItem (Join-Path $RepoRoot '.build-win\mozjpeg') -Filter 'libjpeg*.a' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($found) { $lib = $found.FullName }
     }
     if (-not (Test-Path $lib)) {
@@ -371,7 +406,7 @@ function Build-PngCrush {
     # and libpng symbol twice, and the png.h under pngcrush/tmp is from a
     # different libpng configuration, so neither shortcut works here.
     $libDir = Join-Path $RepoRoot '.build-win\libpng'
-    $lib = Get-ChildItem $libDir -Filter 'libpng*.a' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $lib = Get-ChildItem $libDir -Filter 'libpng*.a' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $lib) {
         Write-Host ''
         Write-Host '==> pngcrush' -ForegroundColor Cyan
@@ -421,9 +456,17 @@ cargo build --release --target x86_64-pc-windows-gnu $ExtraArgs
 "@ -WorkingDirectory (Join-Path $RepoRoot $Directory)
     if ($code -ne 0) { $Results[$Tool] = 'FAILED'; return }
 
-    Publish-Artifact -Tool $Tool -TargetName "$Tool.exe" -Candidates @(
-        "$Directory/target/x86_64-pc-windows-gnu/release/$Tool.exe"
-    ) | Out-Null
+    # A crate inside a workspace puts its binary under the workspace root's
+    # target/, not its own, so look in the parents too before giving up.
+    $candidates = @("$Directory/target/x86_64-pc-windows-gnu/release/$Tool.exe")
+    $probe = $Directory
+    while ($probe -and $probe -ne '.') {
+        $probe = Split-Path $probe -Parent
+        if ($probe) { $candidates += "$probe/target/x86_64-pc-windows-gnu/release/$Tool.exe" }
+    }
+    $candidates += "target/x86_64-pc-windows-gnu/release/$Tool.exe"
+
+    Publish-Artifact -Tool $Tool -TargetName "$Tool.exe" -Candidates $candidates | Out-Null
 }
 
 function Build-Svgo {
@@ -471,8 +514,9 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 if (-not $SkipBootstrap) { Install-Dependencies }
 
+Register-NodePath
 $needsCargo = @('oxipng', 'pngquant', 'svgcleaner') | Where-Object { $Targets -contains $_ }
-if ($needsCargo) { Resolve-Cargo | Out-Null }
+if ($needsCargo) { Resolve-Cargo }
 
 foreach ($tool in $Targets) {
     switch ($tool) {
