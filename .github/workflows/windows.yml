@@ -229,6 +229,12 @@ jobs:
 
       # Re-running the workflow for a tag replaces the assets of its release
       # rather than failing because the release already exists.
+      #
+      # GitHub's release API fails now and then on its own: 1.4.4 took four
+      # attempts through an incident, failing with a 502 on publishing and
+      # then a 404 uploading to the draft it had just created. So each attempt
+      # is retried with a growing pause, and a draft an attempt left behind is
+      # completed and published rather than duplicated.
       - name: Publish the GitHub release
         shell: bash
         env:
@@ -236,15 +242,31 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
           version="${tag#v}"
+          repo="$GITHUB_REPOSITORY"
           files=(
             "dist/ImageOptim-Setup-$version.exe"
             "dist/ImageOptim-Setup-$version.exe.blockmap"
             "dist/latest.yml"
             "dist/ImageOptim-$version-win.zip"
           )
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
-              --title "ImageOptim $version" --generate-notes --verify-tag
-          fi
+          publish() {
+            local draft
+            if draft=$(gh release view "$tag" --repo "$repo" --json isDraft --jq .isDraft 2> /dev/null); then
+              gh release upload "$tag" "${files[@]}" --repo "$repo" --clobber || return 1
+              if [ "$draft" = "true" ]; then
+                gh release edit "$tag" --repo "$repo" --draft=false || return 1
+              fi
+            else
+              gh release create "$tag" "${files[@]}" --repo "$repo" \
+                --title "ImageOptim $version" --generate-notes --verify-tag
+            fi
+          }
+          for attempt in 1 2 3 4 5; do
+            if publish; then exit 0; fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "::warning::Publishing failed on attempt $attempt; retrying in $((attempt * 30))s"
+              sleep $((attempt * 30))
+            fi
+          done
+          echo "::error::The release could not be published after 5 attempts"
+          exit 1
