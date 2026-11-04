@@ -27,6 +27,11 @@ installed.
 
 ![The settings panel, showing the optimizer list and quality sliders](docs/screenshots/settings-dark.png)
 
+The accent colour is a hue and a saturation slider under Appearance; every
+shade in the window follows it, here set to purple.
+
+![The settings panel scrolled to Appearance, with a purple accent](docs/screenshots/settings-appearance-light.png)
+
 ### Download
 
 From [Releases](https://github.com/carlhauser/imageoptim-windows/releases),
@@ -59,7 +64,7 @@ with MinGW-w64 under MSYS2, and `win/` packages the app around them. See
 plans and the Zopfli size threshold were derived.
 
 The screenshots above were taken on Windows 11 from a real run, and were
-themselves optimized by this build: 39.1% smaller, Zopfli winning all three.
+themselves optimized by this build: 38.0% smaller, Zopfli winning all four.
 
 ---
 
