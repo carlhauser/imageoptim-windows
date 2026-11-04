@@ -17,20 +17,24 @@ result of every applicable optimizer is kept.
 
 ![The file list after a run, showing per-file savings and which optimizer won](docs/screenshots/results-light.png)
 
-Light and dark follow the system setting.
+Light and dark follow the system setting, or can be fixed under Settings →
+Appearance.
 
 ![The same list in dark mode](docs/screenshots/results-dark.png)
 
-Settings turns individual optimizers on and off, controls lossy quality per
-format, sets the accent colour, and lists which optimizers are actually
-installed.
+Settings has three tabs. **Optimizers** switches each optimizer on and off
+and shows which are installed; **Options** has lossy quality per format,
+metadata stripping and how hard to work.
 
-![The settings panel, showing the optimizer list and quality sliders](docs/screenshots/settings-dark.png)
+![The settings panel on its Optimizers tab](docs/screenshots/settings-dark.png)
 
-The accent colour is a hue and a saturation slider under Appearance; every
-shade in the window follows it, here set to purple.
+**Appearance** picks the theme and the accent colour, a hue and a saturation
+slider that every shade in the window follows, here set to purple.
 
-![The settings panel scrolled to Appearance, with a purple accent](docs/screenshots/settings-appearance-light.png)
+![The settings panel on its Appearance tab, with a purple accent](docs/screenshots/settings-appearance-light.png)
+
+The window adapts as it narrows: the toolbar keeps its icons, the list drops
+the less important columns, and settings slide over the list.
 
 ### Download
 
@@ -64,7 +68,7 @@ with MinGW-w64 under MSYS2, and `win/` packages the app around them. See
 plans and the Zopfli size threshold were derived.
 
 The screenshots above were taken on Windows 11 from a real run, and were
-themselves optimized by this build: 38.0% smaller, Zopfli winning all four.
+themselves optimized by this build: 37.2% smaller, Zopfli winning all four.
 
 ---
 
