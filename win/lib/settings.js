@@ -72,6 +72,9 @@ const DEFAULTS = {
     // is picked. The default is the blue the app ships with.
     AccentHue: 253,
     AccentSaturation: 80,
+
+    // 'system' follows Windows; 'light' and 'dark' override it for this app.
+    Theme: 'system',
 };
 
 class Settings {

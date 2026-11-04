@@ -10,108 +10,185 @@
 </head>
 <body>
     <header class="toolbar">
+        <!-- The labels hide in a narrow window, leaving the icons: aria-label
+             keeps each button named, and title gives it a tooltip. -->
         <div class="toolbar-group">
-            <button id="add-files" type="button">Add Files</button>
-            <button id="add-folder" type="button">Add Folder</button>
+            <button id="add-files" type="button" class="primary" aria-label="Add Files" title="Add files">
+                <span class="icon i-add-files" aria-hidden="true"></span><span class="label">Add Files</span>
+            </button>
+            <button id="add-folder" type="button" aria-label="Add Folder" title="Add a folder">
+                <span class="icon i-add-folder" aria-hidden="true"></span><span class="label">Add Folder</span>
+            </button>
         </div>
+        <div class="toolbar-divider" aria-hidden="true"></div>
         <div class="toolbar-group">
-            <button id="again" type="button" title="Optimize everything again with the current settings">Again</button>
-            <button id="stop" type="button" disabled>Stop</button>
-            <button id="clear" type="button">Clear</button>
+            <button id="again" type="button" aria-label="Again" title="Optimize everything again with the current settings">
+                <span class="icon i-again" aria-hidden="true"></span><span class="label">Again</span>
+            </button>
+            <button id="stop" type="button" aria-label="Stop" title="Stop" disabled>
+                <span class="icon i-stop" aria-hidden="true"></span><span class="label">Stop</span>
+            </button>
+            <button id="clear" type="button" aria-label="Clear" title="Clear the list">
+                <span class="icon i-clear" aria-hidden="true"></span><span class="label">Clear</span>
+            </button>
         </div>
         <div class="toolbar-spacer"></div>
-        <button id="toggle-settings" type="button" class="icon-button" aria-expanded="false">Settings</button>
+        <button id="toggle-settings" type="button" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="settings-panel">
+            <span class="icon i-settings" aria-hidden="true"></span><span class="label">Settings</span>
+        </button>
     </header>
 
     <main>
-        <table id="file-table">
-            <thead>
-                <tr>
-                    <th class="col-name">Name</th>
-                    <th class="col-size">Size</th>
-                    <th class="col-savings">Savings</th>
-                    <th class="col-tool">Best tool</th>
-                </tr>
-            </thead>
-            <tbody id="file-rows"></tbody>
-        </table>
+        <div class="list-pane">
+            <table id="file-table">
+                <thead>
+                    <tr>
+                        <th class="col-name">Name</th>
+                        <th class="col-size">Size</th>
+                        <th class="col-savings">Savings</th>
+                        <th class="col-tool">Best tool</th>
+                    </tr>
+                </thead>
+                <tbody id="file-rows"></tbody>
+            </table>
 
-        <div id="empty-state">
-            <p class="empty-title">Drop images here</p>
-            <p class="empty-hint">PNG, JPEG, GIF and SVG files, or whole folders.<br>
-               Files are optimized and overwritten in place.</p>
+            <div id="empty-state">
+                <span class="empty-art" aria-hidden="true"><span class="icon i-empty"></span></span>
+                <p class="empty-title">Drop images here</p>
+                <p class="empty-hint">PNG, JPEG, GIF and SVG files, or whole folders.<br>
+                   Files are optimized and overwritten in place.</p>
+            </div>
         </div>
 
         <aside id="settings-panel" hidden>
-            <h2>Optimizers</h2>
-            <label><input type="checkbox" data-setting="OptiPngEnabled"> OxiPNG</label>
-            <label><input type="checkbox" data-setting="ZopfliEnabled"> Zopfli</label>
-            <label><input type="checkbox" data-setting="AdvPngEnabled"> AdvPNG</label>
-            <label><input type="checkbox" data-setting="PngCrush2Enabled"> Pngcrush</label>
-            <label><input type="checkbox" data-setting="JpegTranEnabled"> MozJPEG (jpegtran)</label>
-            <label><input type="checkbox" data-setting="JpegOptimEnabled"> JpegOptim</label>
-            <label><input type="checkbox" data-setting="GuetzliEnabled"> Guetzli <span class="note">slow, uses GBs of RAM</span></label>
-            <label><input type="checkbox" data-setting="GifsicleEnabled"> Gifsicle</label>
-            <label><input type="checkbox" data-setting="SvgoEnabled"> SVGO</label>
-            <label><input type="checkbox" data-setting="SvgcleanerEnabled"> Svgcleaner</label>
-
-            <h2>Quality</h2>
-            <label><input type="checkbox" data-setting="LossyEnabled"> Enable lossy minification</label>
-            <div class="slider">
-                <span>PNG quality</span>
-                <input type="range" min="30" max="100" step="1" data-setting="PngMinQuality">
-                <output data-output="PngMinQuality"></output>
-            </div>
-            <div class="slider">
-                <span>JPEG quality</span>
-                <input type="range" min="30" max="100" step="1" data-setting="JpegOptimMaxQuality">
-                <output data-output="JpegOptimMaxQuality"></output>
-            </div>
-            <div class="slider">
-                <span>GIF quality</span>
-                <input type="range" min="30" max="100" step="1" data-setting="GifQuality">
-                <output data-output="GifQuality"></output>
+            <div class="tabs" role="tablist" aria-label="Settings">
+                <button type="button" role="tab" id="tab-optimizers" aria-controls="pane-optimizers" aria-selected="true">
+                    <span class="icon i-tab-optimizers" aria-hidden="true"></span>Optimizers
+                </button>
+                <button type="button" role="tab" id="tab-options" aria-controls="pane-options" aria-selected="false" tabindex="-1">
+                    <span class="icon i-tab-options" aria-hidden="true"></span>Options
+                </button>
+                <button type="button" role="tab" id="tab-appearance" aria-controls="pane-appearance" aria-selected="false" tabindex="-1">
+                    <span class="icon i-tab-appearance" aria-hidden="true"></span>Appearance
+                </button>
             </div>
 
-            <h2>General</h2>
-            <label><input type="checkbox" data-setting="PngOutRemoveChunks"> Strip metadata (PNG)</label>
-            <label><input type="checkbox" data-setting="JpegTranStripAll"> Strip metadata (JPEG)</label>
-            <label><input type="checkbox" data-setting="PreserveDates"> Preserve file dates</label>
-            <div class="choice">
-                <span>Queue order</span>
-                <select data-setting="QueueOrder">
-                    <option value="smallest">Smallest files first</option>
-                    <option value="largest">Largest files first</option>
-                    <option value="added">Order added</option>
-                </select>
-            </div>
-            <label><input type="checkbox" data-setting="ThoroughPng"> Thorough PNG compression <span class="note">much slower, ~0.01% smaller</span></label>
-            <div class="slider">
-                <span>Optimizers at once</span>
-                <input type="range" min="1" max="16" step="1" data-setting="MaxWorkers">
-                <output data-output="MaxWorkers"></output>
-            </div>
-            <div class="slider">
-                <span>Effort level</span>
-                <input type="range" min="1" max="7" step="1" data-setting="AdvPngLevel">
-                <output data-output="AdvPngLevel"></output>
+            <div class="panes">
+                <section class="pane" id="pane-optimizers" role="tabpanel" aria-labelledby="tab-optimizers">
+                    <h2>PNG</h2>
+                    <div class="card">
+                        <label class="row"><span class="row-text">OxiPNG</span><input type="checkbox" class="switch" data-setting="OptiPngEnabled"></label>
+                        <label class="row"><span class="row-text">Zopfli</span><input type="checkbox" class="switch" data-setting="ZopfliEnabled"></label>
+                        <label class="row"><span class="row-text">AdvPNG</span><input type="checkbox" class="switch" data-setting="AdvPngEnabled"></label>
+                        <label class="row"><span class="row-text">Pngcrush</span><input type="checkbox" class="switch" data-setting="PngCrush2Enabled"></label>
+                    </div>
+
+                    <h2>JPEG</h2>
+                    <div class="card">
+                        <label class="row"><span class="row-text">MozJPEG <small>jpegtran</small></span><input type="checkbox" class="switch" data-setting="JpegTranEnabled"></label>
+                        <label class="row"><span class="row-text">JpegOptim</span><input type="checkbox" class="switch" data-setting="JpegOptimEnabled"></label>
+                        <label class="row"><span class="row-text">Guetzli <small>slow, uses GBs of RAM</small></span><input type="checkbox" class="switch" data-setting="GuetzliEnabled"></label>
+                    </div>
+
+                    <h2>GIF and SVG</h2>
+                    <div class="card">
+                        <label class="row"><span class="row-text">Gifsicle</span><input type="checkbox" class="switch" data-setting="GifsicleEnabled"></label>
+                        <label class="row"><span class="row-text">SVGO</span><input type="checkbox" class="switch" data-setting="SvgoEnabled"></label>
+                        <label class="row"><span class="row-text">Svgcleaner</span><input type="checkbox" class="switch" data-setting="SvgcleanerEnabled"></label>
+                    </div>
+
+                    <h2>Installed tools</h2>
+                    <div class="card">
+                        <ul id="tool-list"></ul>
+                    </div>
+                    <p class="bin-dir" id="bin-dir"></p>
+                </section>
+
+                <section class="pane" id="pane-options" role="tabpanel" aria-labelledby="tab-options" hidden>
+                    <h2>Quality</h2>
+                    <div class="card">
+                        <label class="row"><span class="row-text">Lossy minification</span><input type="checkbox" class="switch" data-setting="LossyEnabled"></label>
+                        <div class="slider">
+                            <span>PNG quality</span>
+                            <input type="range" min="30" max="100" step="1" data-setting="PngMinQuality">
+                            <output data-output="PngMinQuality"></output>
+                        </div>
+                        <div class="slider">
+                            <span>JPEG quality</span>
+                            <input type="range" min="30" max="100" step="1" data-setting="JpegOptimMaxQuality">
+                            <output data-output="JpegOptimMaxQuality"></output>
+                        </div>
+                        <div class="slider">
+                            <span>GIF quality</span>
+                            <input type="range" min="30" max="100" step="1" data-setting="GifQuality">
+                            <output data-output="GifQuality"></output>
+                        </div>
+                    </div>
+
+                    <h2>Files</h2>
+                    <div class="card">
+                        <label class="row"><span class="row-text">Strip metadata from PNG</span><input type="checkbox" class="switch" data-setting="PngOutRemoveChunks"></label>
+                        <label class="row"><span class="row-text">Strip metadata from JPEG</span><input type="checkbox" class="switch" data-setting="JpegTranStripAll"></label>
+                        <label class="row"><span class="row-text">Preserve file dates</span><input type="checkbox" class="switch" data-setting="PreserveDates"></label>
+                    </div>
+
+                    <h2>Performance</h2>
+                    <div class="card">
+                        <div class="row">
+                            <span class="row-text">Queue order</span>
+                            <select data-setting="QueueOrder">
+                                <option value="smallest">Smallest first</option>
+                                <option value="largest">Largest first</option>
+                                <option value="added">Order added</option>
+                            </select>
+                        </div>
+                        <label class="row"><span class="row-text">Thorough PNG compression <small>much slower, ~0.01% smaller</small></span><input type="checkbox" class="switch" data-setting="ThoroughPng"></label>
+                        <div class="slider">
+                            <span>Optimizers at once</span>
+                            <input type="range" min="1" max="16" step="1" data-setting="MaxWorkers">
+                            <output data-output="MaxWorkers"></output>
+                        </div>
+                        <div class="slider">
+                            <span>Effort level</span>
+                            <input type="range" min="1" max="7" step="1" data-setting="AdvPngLevel">
+                            <output data-output="AdvPngLevel"></output>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="pane" id="pane-appearance" role="tabpanel" aria-labelledby="tab-appearance" hidden>
+                    <h2>Theme</h2>
+                    <div class="segmented" role="radiogroup" aria-label="Theme">
+                        <label><input type="radio" name="theme" value="system" data-setting="Theme"><span class="icon i-theme-system" aria-hidden="true"></span>System</label>
+                        <label><input type="radio" name="theme" value="light" data-setting="Theme"><span class="icon i-theme-light" aria-hidden="true"></span>Light</label>
+                        <label><input type="radio" name="theme" value="dark" data-setting="Theme"><span class="icon i-theme-dark" aria-hidden="true"></span>Dark</label>
+                    </div>
+
+                    <h2>Accent color</h2>
+                    <div class="card">
+                        <div class="slider">
+                            <span>Hue</span>
+                            <input type="range" class="color-slider hue" min="0" max="359" step="1" data-setting="AccentHue">
+                        </div>
+                        <div class="slider">
+                            <span>Saturation</span>
+                            <input type="range" class="color-slider saturation" min="0" max="100" step="1" data-setting="AccentSaturation">
+                        </div>
+                        <div class="accent-preview" aria-hidden="true">
+                            <span class="swatch swatch-accent"></span>
+                            <span class="swatch swatch-dim"></span>
+                            <span class="swatch swatch-selection"></span>
+                            <span class="preview-text">Saved 42.0%</span>
+                        </div>
+                    </div>
+                </section>
             </div>
 
-            <h2>Appearance</h2>
-            <div class="slider">
-                <span>Accent color</span>
-                <input type="range" class="color-slider hue" min="0" max="359" step="1" data-setting="AccentHue">
-            </div>
-            <div class="slider">
-                <span>Saturation</span>
-                <input type="range" class="color-slider saturation" min="0" max="100" step="1" data-setting="AccentSaturation">
-            </div>
-
-            <h2>Installed tools</h2>
-            <ul id="tool-list"></ul>
-            <p class="bin-dir" id="bin-dir"></p>
-
-            <button id="reset-settings" type="button">Restore defaults</button>
+            <footer class="panel-footer">
+                <button id="reset-settings" type="button">
+                    <span class="icon i-reset" aria-hidden="true"></span>Restore defaults
+                </button>
+            </footer>
         </aside>
     </main>
 
@@ -126,7 +203,12 @@
         <span id="status-savings"></span>
     </footer>
 
-    <div id="drop-overlay" hidden><span>Drop to optimize</span></div>
+    <div id="drop-overlay" hidden>
+        <div class="drop-card">
+            <span class="icon i-drop" aria-hidden="true"></span>
+            <span>Drop to optimize</span>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>

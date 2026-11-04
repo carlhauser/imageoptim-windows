@@ -24,6 +24,8 @@ the source in that repository, and keeps its own license:
                    dependencies
 
 The interface font is Inter, under the SIL Open Font License 1.1: Inter-OFL.txt.
+The interface icons are Microsoft's Fluent UI System Icons, under the MIT
+license: FluentIcons-LICENSE.txt.
 
 Electron and Chromium ship their own notices beside ImageOptim.exe:
 LICENSE.electron.txt and LICENSES.chromium.html.

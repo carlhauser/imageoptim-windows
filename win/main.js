@@ -73,13 +73,26 @@ let settings = null;
 let queue = null;
 let updateController = null;
 
+// --bg in renderer/style.css, so the window does not flash a different colour
+// before the page paints
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#202020' : '#f3f3f3');
+
+// Settings → Appearance → Theme. themeSource also drives prefers-color-scheme
+// in the page and the colour of native controls, so CSS needs nothing more.
+function applyTheme() {
+    const theme = settings.get('Theme');
+    nativeTheme.themeSource = theme === 'light' || theme === 'dark' ? theme : 'system';
+    if (mainWindow) mainWindow.setBackgroundColor(windowBackground());
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
-        width: 780,
-        height: 560,
-        minWidth: 520,
-        minHeight: 320,
-        backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#f4f4f4',
+        width: 820,
+        height: 580,
+        // The layout adapts down to this (see the width queries in style.css)
+        minWidth: 420,
+        minHeight: 360,
+        backgroundColor: windowBackground(),
         title: 'ImageOptim',
         icon: resolveIcon(),
         webPreferences: {
@@ -213,8 +226,16 @@ function registerIpc() {
     });
 
     ipcMain.handle('settings:get', () => settings.all());
-    ipcMain.handle('settings:set', (event, patch) => settings.update(patch || {}));
-    ipcMain.handle('settings:reset', () => settings.reset());
+    ipcMain.handle('settings:set', (event, patch) => {
+        const values = settings.update(patch || {});
+        if (patch && 'Theme' in patch) applyTheme();
+        return values;
+    });
+    ipcMain.handle('settings:reset', () => {
+        const values = settings.reset();
+        applyTheme();
+        return values;
+    });
 
     ipcMain.handle('tools:list', () => ({
         binDir: queue.binDir,
@@ -324,6 +345,7 @@ app.whenReady().then(() => {
     app.setAppUserModelId('com.imageoptim.windows');
 
     settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
+    applyTheme();
     queue = new Queue({ settings, binDir: resolveBinDir() });
 
     queue.on('job', (snapshot) => send('job:change', snapshot));

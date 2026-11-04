@@ -238,9 +238,18 @@ scheme even in a dark window. Scrollbars use the standard `scrollbar-width` and
 The UI font is Inter, bundled in `renderer/fonts/` (from
 `@fontsource-variable/inter`, SIL Open Font License, `OFL.txt` beside it) so the
 app looks the same on machines without it installed; anything outside Inter's
-scripts falls back to Segoe UI. The accent colour is a hue and saturation from
+scripts falls back to Segoe UI. The icons are Microsoft's Fluent UI System
+Icons (MIT), copied into `renderer/icons/` and drawn as CSS masks so they take
+the text or accent colour. The accent colour is a hue and saturation from
 Settings → Appearance; `style.css` derives every shade from them in OKLCH at
-fixed lightnesses, so text keeps its contrast whichever colour is picked.
+fixed lightnesses, so text keeps its contrast whichever colour is picked. The
+Theme setting there sets Electron's `nativeTheme.themeSource`, which drives
+`prefers-color-scheme` in the page and the native controls alike.
+
+The layout follows the window down to its 420 px minimum: toolbar labels give
+way to icons (each button keeps an `aria-label` and a tooltip), the list drops
+Best tool and then Size through container queries on its own width, and below
+720 px the settings panel overlays the list instead of squeezing it.
 
 ## Saving safely
 

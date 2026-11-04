@@ -45,7 +45,7 @@ function renderRow(job) {
         tr = document.createElement('tr');
         tr.dataset.id = job.id;
         tr.innerHTML = `
-            <td class="col-name col-name-cell"></td>
+            <td class="col-name col-name-cell"><span class="state" aria-hidden="true"></span><span class="name"></span></td>
             <td class="col-size size"></td>
             <td class="col-savings savings"></td>
             <td class="col-tool tool"></td>`;
@@ -55,8 +55,10 @@ function renderRow(job) {
 
     const [nameCell, sizeCell, savingsCell, toolCell] = tr.children;
 
-    nameCell.textContent = job.name;
+    nameCell.lastElementChild.textContent = job.name;
     nameCell.title = job.path;
+    // done | unchanged | running | queued | error | reverted, drawn by style.css
+    tr.dataset.state = job.state === 'done' && !job.percentOptimized ? 'unchanged' : job.state;
     sizeCell.textContent = formatBytes(job.bestSize);
     savingsCell.textContent = formatSavings(job);
     savingsCell.title = job.state === 'error' ? (job.error || 'Error') : '';
@@ -134,6 +136,30 @@ document.getElementById('toggle-settings').addEventListener('click', (event) => 
     event.currentTarget.setAttribute('aria-expanded', String(open));
     if (open) loadTools();
 });
+
+// Settings tabs: a plain WAI-ARIA tab list, with the arrow keys moving
+// between tabs and only the selected one in the tab order.
+const tabs = [...settingsEl.querySelectorAll('[role="tab"]')];
+
+function selectTab(tab, focus = false) {
+    for (const t of tabs) {
+        const selected = t === tab;
+        t.setAttribute('aria-selected', String(selected));
+        t.tabIndex = selected ? 0 : -1;
+        document.getElementById(t.getAttribute('aria-controls')).hidden = !selected;
+    }
+    if (focus) tab.focus();
+}
+
+for (const tab of tabs) {
+    tab.addEventListener('click', () => selectTab(tab));
+    tab.addEventListener('keydown', (event) => {
+        const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+        if (!step) return;
+        event.preventDefault();
+        selectTab(tabs[(tabs.indexOf(tab) + step + tabs.length) % tabs.length], true);
+    });
+}
 
 // ---------------------------------------------------------------- drag & drop
 
@@ -214,6 +240,14 @@ function applyAccent(values) {
     }
 }
 
+// The sliders draw their own filled track, which needs to know how far along
+// the thumb is.
+function updateFill(input) {
+    if (input.type !== 'range') return;
+    const min = Number(input.min), max = Number(input.max);
+    input.style.setProperty('--fill', `${((Number(input.value) - min) / (max - min)) * 100}%`);
+}
+
 function applySettings(values) {
     applyAccent(values);
     for (const input of settingsEl.querySelectorAll('[data-setting]')) {
@@ -222,8 +256,11 @@ function applySettings(values) {
 
         if (input.type === 'checkbox') {
             input.checked = Boolean(values[key]);
+        } else if (input.type === 'radio') {
+            input.checked = input.value === values[key];
         } else {
             input.value = values[key];
+            updateFill(input);
             const output = settingsEl.querySelector(`[data-output="${key}"]`);
             if (output) output.value = values[key];
         }
@@ -237,9 +274,10 @@ settingsEl.addEventListener('input', async (event) => {
     const key = input.dataset.setting;
     let value;
     if (input.type === 'checkbox') value = input.checked;
-    else if (input.tagName === 'SELECT') value = input.value;
+    else if (input.type === 'radio' || input.tagName === 'SELECT') value = input.value;
     else value = Number(input.value);
 
+    updateFill(input);
     const output = settingsEl.querySelector(`[data-output="${key}"]`);
     if (output) output.value = value;
     // Recolour while dragging rather than after the round trip to main
@@ -259,7 +297,12 @@ async function loadTools() {
     for (const tool of tools) {
         const li = document.createElement('li');
         li.classList.toggle('missing', !tool.installed);
-        li.innerHTML = `<span>${tool.name}</span><span>${tool.installed ? 'ready' : 'not built'}</span>`;
+        const name = document.createElement('span');
+        name.textContent = tool.name;
+        const status = document.createElement('span');
+        status.className = 'tool-status';
+        status.textContent = tool.installed ? 'Ready' : 'Not built';
+        li.append(name, status);
         toolListEl.appendChild(li);
     }
 
