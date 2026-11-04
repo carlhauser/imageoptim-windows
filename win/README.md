@@ -374,9 +374,8 @@ installed from then on accept only updates signed by the same publisher.
    | `latest.yml` | for the updater: version, file name, sha512 |
 
    Release notes are generated from the commits since the previous tag and can
-   be edited on GitHub afterwards. The last two files go unused while the
-   updater is off; they are published anyway so that turning it on needs no
-   change here.
+   be edited on GitHub afterwards. Installed copies pick the release up by
+   themselves within a few seconds of their next start.
 
 The push to `main` starts a second Windows build of the same commit, because
 `win/package.json` changed. Only the tag's run publishes anything, so the other
