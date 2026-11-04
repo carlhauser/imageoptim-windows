@@ -452,8 +452,14 @@ gcc -O3 -fomit-frame-pointer -I'$incBuild' -I'$incSrc' \
 }
 
 function Build-Guetzli {
+    # Guetzli's generated makefile links libpng through `pkg-config --libs`,
+    # which is dynamic. The resulting exe runs on the build machine, where
+    # MSYS2's mingw64\bin is on PATH, and dies with 0xC0000135
+    # (STATUS_DLL_NOT_FOUND) anywhere else - including inside the package.
+    # -static pulls libpng, zlib, libstdc++, libgcc and winpthread in, matching
+    # the other ten tools, which are already self-contained.
     $code = Invoke-Step -Name 'Guetzli' -Script @"
-make -j$Jobs
+make -j$Jobs LDFLAGS="-static"
 "@ -WorkingDirectory (Join-Path $RepoRoot 'guetzli\guetzli')
     if ($code -ne 0) { $Results['guetzli'] = 'FAILED'; return }
 

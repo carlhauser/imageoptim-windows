@@ -174,6 +174,11 @@ script on macOS would have found:
   to `_stat`, which on MinGW-w64 expands to `_stat64i32` and takes a different
   struct than `misc.c` passes.
 - AdvanceCOMP 1.15 declares `throw()` specifications that C++17 removed.
+- Guetzli's generated makefile links libpng dynamically through `pkg-config`.
+  The executable then runs on the build machine, where MSYS2's `mingw64\bin` is
+  on PATH, and fails with `0xC0000135` (STATUS_DLL_NOT_FOUND) anywhere else. It
+  is now linked with `-static`. The other ten tools were already self-contained,
+  which is why only this one broke.
 - `svgo.js` is not an executable, so it sat outside the `bin/` artifact path and
   never reached the packaging job. The app shipped with no SVGO and reported
   nothing, because a missing optimizer is skipped by design. The packaging job
