@@ -274,6 +274,14 @@ class Queue extends EventEmitter {
         return job.revert(this.settings.all());
     }
 
+    // True while any file is queued, being optimized or being saved. running is
+    // only decremented once a job's run() has settled, which includes its save,
+    // so this stays true until the original has been replaced. The updater will
+    // not restart the app while it is.
+    isBusy() {
+        return this.running > 0 || this.pending.length > 0;
+    }
+
     stats() {
         let originalTotal = 0;
         let bestTotal = 0;

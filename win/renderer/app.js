@@ -11,6 +11,9 @@ const binDirEl = document.getElementById('bin-dir');
 const statusFilesEl = document.getElementById('status-files');
 const statusSavingsEl = document.getElementById('status-savings');
 const stopButton = document.getElementById('stop');
+const updateBannerEl = document.getElementById('update-banner');
+const updateTextEl = document.getElementById('update-text');
+const updateActionsEl = document.getElementById('update-actions');
 
 const rows = new Map(); // job id -> <tr>
 const selection = new Set();
@@ -248,14 +251,41 @@ async function loadTools() {
     binDirEl.textContent = binDir;
 }
 
+// --------------------------------------------------------------------- updates
+
+// The wording and the buttons are decided in lib/updater.js; this only draws
+// them. textContent throughout, since the version comes from GitHub.
+function renderUpdate(state) {
+    const banner = state && state.banner;
+    updateBannerEl.hidden = !banner;
+    if (!banner) return;
+
+    updateTextEl.textContent = banner.text;
+    updateActionsEl.replaceChildren(...banner.actions.map((action) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = action.label;
+        button.dataset.action = action.id;
+        button.classList.toggle('primary', Boolean(action.primary));
+        return button;
+    }));
+}
+
+updateActionsEl.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (button) api.updateAction(button.dataset.action);
+});
+
 // ----------------------------------------------------------------------- init
 
 api.onJobChange(renderRow);
 api.onProgress(renderStats);
 api.onIdle(renderStats);
 api.onReset(renderAll);
+api.onUpdateState(renderUpdate);
 
 (async function init() {
     applySettings(await api.getSettings());
     await refresh();
+    renderUpdate(await api.getUpdateState());
 }());

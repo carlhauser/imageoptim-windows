@@ -56,6 +56,10 @@ To produce an installer and a portable zip in `win\dist`:
 npm run dist:win
 ```
 
+That writes `ImageOptim-Setup-<version>.exe`, its `.blockmap`, `latest.yml` and
+`ImageOptim-<version>-win.zip`. It never publishes anything: releases are made
+by CI from a version tag, as described under [Releasing](#releasing).
+
 `extraResources` copies `win\resources` into the packaged app, so the installer
 carries the executables built in step 1.
 
@@ -123,7 +127,7 @@ cd win && npm test
 ```
 
 No dependencies: `node:test` with the optimizers stubbed, so nothing is spawned.
-74 tests across four areas.
+112 tests across five areas.
 
 `test/arguments.test.js` is the one that matters most. Every optimizer's command
 line is asserted against the macOS worker it was ported from, with the
@@ -137,6 +141,13 @@ already-optimal file.
 `test/queue.test.js` covers folder scanning and queue order, and
 `test/job.test.js` covers the parts that can destroy a file: adopting a result,
 the atomic replace, the staleness refusals and revert.
+
+`test/updater.test.js` drives the update logic against a fake electron-updater,
+so it needs neither the network nor the package installed: telling an install
+from the unzipped copy, never restarting while the queue is busy, which checks
+stay silent, the banner's wording, and the `package.json` settings the release
+path depends on (a draft release or an installer name with a space in it would
+each break updating without failing anything else).
 
 Stubbed tests cannot prove the optimizers *accept* those arguments.
 `test/binaries.test.js` does, by running the real executables; it is skipped
@@ -154,7 +165,9 @@ checks on Windows against the executables each build has just produced.
 `.github/workflows/windows.yml` builds every optimizer from the sources in this
 repository on a `windows-latest` runner, then packages the app around them with
 electron-builder. It runs on demand and on changes to `build-windows.ps1` or
-`win/`, excluding markdown, because Windows runners bill at twice the rate.
+`win/`, excluding markdown, because Windows runners bill at twice the rate. A
+`v*` tag runs it too, and then it also publishes the GitHub Release the updater
+reads; see [Releasing](#releasing).
 
 Getting it green took six runs and exposed faults that no amount of reading the
 script on macOS would have found:
@@ -268,6 +281,117 @@ scanned recursively for PNG, JPEG, GIF and SVG.
 
 Files are overwritten in place. Keep a copy of anything you cannot regenerate.
 
+## Updates
+
+The packaged app checks GitHub for a newer release a few seconds after it
+starts, through electron-updater's GitHub provider pointed at
+`carlhauser/imageoptim-windows`. **Help → Check for Updates…** does the same on
+demand.
+
+* **The installed copy** (`ImageOptim-Setup-<version>.exe`) downloads a newer
+  version in the background, then shows a bar above the status bar with
+  **Restart to Update**. Files are rewritten in place, so if any are queued or
+  being optimized the restart waits until the queue is idle; the bar says so and
+  can cancel. The restart is an ordinary quit - `before-quit` stops the queue
+  and removes the session's backups, so Revert does not carry across an update,
+  as it does not across any quit. **Later** leaves the update to install
+  silently the next time the app quits.
+* **The portable copy** (the zip) cannot replace its own files, so it only says
+  that a new version exists and links to its release page. It is told apart
+  from an install by the missing `Uninstall ImageOptim.exe` beside
+  `ImageOptim.exe`: electron-builder sets `PORTABLE_EXECUTABLE_DIR` only for its
+  `portable` target, which is a self-extracting exe, not for `zip`.
+* **A checkout** (`npm start`) never checks.
+
+A background check says nothing when there is no update or GitHub cannot be
+reached; only a check you ask for reports "up to date" or an error. What the
+updater does is logged to `%APPDATA%\ImageOptim\updater.log`.
+
+Releases made before the updater existed (1.4.1 and earlier) cannot update
+themselves: install the first release that has it by hand, and it takes care of
+the rest.
+
+### Unsigned updates
+
+The app is not code-signed, and updating does not need it to be. The NSIS
+updater checks an installer's Authenticode signature only when the installed
+copy's `resources\app-update.yml` names a `publisherName`, and electron-builder
+writes one only for a signed build; `win.verifyUpdateCodeSignature: false` in
+`package.json` makes that explicit. The download is instead checked against the
+sha512 in `latest.yml`, which comes over HTTPS from the same release - so anyone
+who can publish a release on the repository can ship code to every installed
+copy, and write access to it should be treated accordingly.
+
+The updater downloads with Electron's own network stack, so the installer has
+no mark of the web and SmartScreen does not stop it; the blue "Windows protected
+your PC" box is only for the first install, from a browser.
+
+If the app is signed later, drop `verifyUpdateCodeSignature: false`. Copies
+installed from then on accept only updates signed by the same publisher.
+
+### What the repository has to provide
+
+The provider reads `https://github.com/carlhauser/imageoptim-windows/releases.atom`
+and the release assets without credentials, so the repository has to be public.
+A private one answers 404, which a manual check reports as "no public releases"
+and a background check ignores. It takes the newest release that is neither a
+draft nor a pre-release, and needs `latest.yml` in it; the installer is fetched
+by the name `latest.yml` gives.
+
+## Releasing
+
+1. Set the new version in `win/package.json` and its lock file:
+
+   ```sh
+   cd win && npm version 1.5.0 --no-git-tag-version
+   ```
+
+2. Commit that, then tag the commit and push both:
+
+   ```sh
+   git tag v1.5.0
+   ```
+
+   ```sh
+   git push origin main v1.5.0
+   ```
+
+3. The tag starts `.github/workflows/windows.yml`. It refuses a tag that does
+   not match `package.json` before compiling anything, builds every optimizer
+   and the app, runs the tests including the binary checks (failing if none ran
+   or any were skipped), and then the `release` job publishes GitHub Release
+   `v1.5.0` with:
+
+   | file | for |
+   | --- | --- |
+   | `ImageOptim-Setup-1.5.0.exe` | new installs, and the update itself |
+   | `ImageOptim-Setup-1.5.0.exe.blockmap` | differential downloads from the next release |
+   | `latest.yml` | what installed copies read: version, file name, sha512 |
+   | `ImageOptim-1.5.0-win.zip` | the portable copy |
+
+   Release notes are generated from the commits since the previous tag and can
+   be edited on GitHub afterwards.
+
+Installed copies pick the release up on their next start.
+
+The push to `main` starts a second Windows build of the same commit, because
+`win/package.json` changed. Only the tag's run publishes anything, so the other
+can be cancelled from the Actions tab to save the minutes.
+
+A release is published only when every job succeeded. The packaging job still
+runs after a partial optimizer build, so its artifacts can be inspected, but
+installed copies would install a release with missing optimizers by
+themselves. Re-running the workflow for a tag replaces that release's files
+rather than failing. The updater never downgrades, so a bad release is fixed by
+releasing a higher version.
+
+The installer is named without spaces (`nsis.artifactName`). GitHub turns spaces
+in asset names into dots while `latest.yml` names a dashed copy, so an
+`ImageOptim Setup 1.5.0.exe` uploaded as it is would never be found.
+`npm run dist:win` passes `--publish never` because electron-builder otherwise
+publishes by itself whenever it sees a tag on CI; uploading is left to the
+release job alone.
+
 ## Layout
 
 ```
@@ -282,6 +406,7 @@ win/
   lib/tools.js          one entry per optimizer, with its exact arguments
   lib/job.js            per-image plan, execution and saving
   lib/queue.js          folder scanning, concurrency, totals
+  lib/updater.js        update checks, install detection, the banner's wording
   renderer/             the window itself
   resources/bin/        the built executables (created by the build script)
   resources/icon.ico    app icon, converted from imageoptim/ImageOptim.icns

@@ -5,6 +5,9 @@
 # Deliberately not run on every push. The from-source build compiles MozJPEG,
 # libpng, Guetzli and three Rust crates, and Windows runners bill at twice the
 # rate of Linux ones.
+#
+# Pushing a tag v<version> also publishes the result as a GitHub Release, which
+# is what the app's built-in updater reads (see the release job at the end).
 
 name: Windows build
 
@@ -17,6 +20,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # GitHub does not apply the paths filter below to tag pushes, so every
+    # version tag builds.
+    tags: ['v*']
     paths:
       - 'build-windows.ps1'
       - 'win/**'
@@ -32,6 +38,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Before ninety minutes of compiling rather than after: the updater
+      # compares versions from latest.yml, which comes from package.json, so a
+      # tag that disagrees with it would publish a release under the wrong name.
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content win/package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match version $version in win/package.json"
+          }
 
       - name: Show what the runner already has
         shell: pwsh
@@ -140,10 +158,15 @@ jobs:
           fi
           rm -f result.txt
 
+      # dist:win passes --publish never. Publishing is the release job's alone:
+      # left to itself, electron-builder publishes whenever it sees a tag on CI.
       - name: Build the installer
         working-directory: win
         run: npm run dist:win
 
+      # latest.yml and the installer's .blockmap are what the updater reads:
+      # the version and checksum, and the block hashes for a differential
+      # download from the previous release's installer.
       - name: Upload the installer and portable zip
         if: always()
         uses: actions/upload-artifact@v4
@@ -151,5 +174,71 @@ jobs:
           name: imageoptim-windows
           path: |
             win/dist/*.exe
+            win/dist/*.exe.blockmap
             win/dist/*.zip
+            win/dist/latest.yml
           if-no-files-found: warn
+
+  # Publishes a version tag as a GitHub Release. Installed copies of the app
+  # find it through the releases feed, download the installer named in
+  # latest.yml and verify it against the sha512 there.
+  release:
+    name: Publish the release
+    runs-on: ubuntu-latest
+    needs: [optimizers, package]
+    # The package job also runs after a partial optimizer build, which is fine
+    # for an artifact to look at but not for something installed copies pick up
+    # by themselves, so a release needs every job to have succeeded.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') &&
+      needs.optimizers.result == 'success' &&
+      needs.package.result == 'success'
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Collect the installer
+        uses: actions/download-artifact@v4
+        with:
+          name: imageoptim-windows
+          path: dist
+
+      - name: Check the files belong to this tag
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          ls -l dist
+          grep -qx "version: $version" dist/latest.yml || {
+            echo "::error::latest.yml is not for version $version"; cat dist/latest.yml; exit 1;
+          }
+          for f in "ImageOptim-Setup-$version.exe" "ImageOptim-Setup-$version.exe.blockmap" "ImageOptim-$version-win.zip"; do
+            test -f "dist/$f" || { echo "::error::dist/$f is missing"; exit 1; }
+          done
+          # Every file latest.yml names has to be uploaded under exactly that
+          # name, or the updater's download 404s.
+          grep -E '^ *(- )?(url|path): ' dist/latest.yml | sed -E 's/^ *(- )?(url|path): //' | sort -u | while read -r name; do
+            test -f "dist/$name" || { echo "::error::latest.yml names $name, which was not built"; exit 1; }
+          done
+
+      # Re-running the workflow for a tag replaces the assets of its release
+      # rather than failing because the release already exists.
+      - name: Publish the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          files=(
+            "dist/ImageOptim-Setup-$version.exe"
+            "dist/ImageOptim-Setup-$version.exe.blockmap"
+            "dist/latest.yml"
+            "dist/ImageOptim-$version-win.zip"
+          )
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
+              --title "ImageOptim $version" --generate-notes --verify-tag
+          fi

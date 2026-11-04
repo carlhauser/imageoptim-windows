@@ -7,6 +7,10 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme } = requir
 const { Settings } = require('./lib/settings');
 const { Queue } = require('./lib/queue');
 const { sweepTempDirs, releaseTempDir } = require('./lib/job');
+const updates = require('./lib/updater');
+
+// Long enough that the first check does not compete with startup.
+const UPDATE_CHECK_DELAY_MS = 3000;
 
 // Where the optimizer executables live. Packaged builds get them from
 // resources\bin; a checkout uses win\resources\bin. IMAGEOPTIM_BIN overrides
@@ -67,6 +71,7 @@ function filePathsFromArgv(argv, cwd = process.cwd()) {
 let mainWindow = null;
 let settings = null;
 let queue = null;
+let updateController = null;
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -141,6 +146,21 @@ function buildMenu() {
                 { role: 'zoomOut' },
             ],
         },
+        {
+            label: '&Help',
+            submenu: [
+                {
+                    label: 'Check for Updates…',
+                    click: () => { if (updateController) updateController.check({ manual: true }); },
+                },
+                {
+                    label: 'Releases on GitHub',
+                    click: () => shell.openExternal(updates.RELEASES_URL),
+                },
+                { type: 'separator' },
+                { label: `ImageOptim ${app.getVersion()}`, enabled: false },
+            ],
+        },
     ];
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -199,6 +219,92 @@ function registerIpc() {
         binDir: queue.binDir,
         tools: queue.installedTools(),
     }));
+
+    ipcMain.handle('update:state', () => (updateController ? updateController.snapshot() : null));
+    ipcMain.handle('update:action', (event, id) => (
+        updateController ? updateController.action(String(id)) : { ok: false, reason: 'not-ready' }
+    ));
+}
+
+function messageBox(options) {
+    return mainWindow && !mainWindow.isDestroyed()
+        ? dialog.showMessageBox(mainWindow, options)
+        : dialog.showMessageBox(options);
+}
+
+// The answer to Help > Check for Updates. Background checks never get here:
+// they stay silent unless there is an update to offer.
+async function showUpdateResult(result) {
+    if (result.kind === 'up-to-date') {
+        await messageBox({
+            type: 'info',
+            message: 'ImageOptim is up to date',
+            detail: `Version ${app.getVersion()} is the newest release.`,
+            buttons: ['OK'],
+        });
+    } else if (result.kind === 'ready') {
+        const { response } = await messageBox({
+            type: 'info',
+            message: `ImageOptim ${result.version} is ready to install`,
+            detail: 'It installs when you quit, or you can restart now. '
+                + 'If files are being optimized, the restart waits until they are finished.',
+            buttons: ['Restart to Update', 'Later'],
+            defaultId: 0,
+            cancelId: 1,
+        });
+        if (response === 0) updateController.restart();
+    } else if (result.kind === 'error') {
+        const headline = {
+            check: 'Couldn’t check for updates',
+            download: 'The update could not be downloaded',
+            install: 'The update could not be started',
+        }[result.stage] || 'Couldn’t check for updates';
+        const { response } = await messageBox({
+            type: 'warning',
+            message: headline,
+            detail: `${result.message}\n\nNew versions are also published on the releases page.`,
+            buttons: ['OK', 'Open Releases Page'],
+            defaultId: 0,
+            cancelId: 0,
+        });
+        if (response === 1) shell.openExternal(updates.RELEASES_URL);
+    } else if (result.kind === 'dev') {
+        await messageBox({
+            type: 'info',
+            message: 'Updates are checked only in the packaged app',
+            detail: 'This copy runs from a source checkout, so it is updated with git rather than from GitHub releases.',
+            buttons: ['OK'],
+        });
+    }
+}
+
+// Installed copies download in the background and offer a restart; the
+// unzipped portable copy cannot replace its own files, so it only says that a
+// release exists. A checkout never checks at all.
+function setupUpdates() {
+    const kind = updates.installKind({ isPackaged: app.isPackaged, execPath: process.execPath });
+
+    let updater = null;
+    if (kind !== 'dev') {
+        // Required here rather than at the top: a checkout has no use for it.
+        ({ autoUpdater: updater } = require('electron-updater'));
+        updater.logger = updates.makeFileLogger(path.join(app.getPath('userData'), 'updater.log'));
+    }
+
+    updateController = new updates.UpdateController({
+        updater,
+        kind,
+        isBusy: () => queue.isBusy(),
+        currentVersion: app.getVersion(),
+    });
+    updateController.on('state', (state) => send('update:state', state));
+    updateController.on('manual-result', (result) => { showUpdateResult(result); });
+    updateController.on('open-url', (url) => shell.openExternal(url));
+
+    // A restart asked for mid-run happens here, once nothing is being written.
+    queue.on('idle', () => updateController.queueIdle());
+
+    if (kind !== 'dev') setTimeout(() => updateController.check(), UPDATE_CHECK_DELAY_MS);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -221,6 +327,7 @@ app.whenReady().then(() => {
     registerIpc();
     buildMenu();
     createWindow();
+    setupUpdates();
 
     // Reclaim scratch directories left by a previous run that was killed.
     sweepTempDirs();
@@ -232,6 +339,8 @@ app.whenReady().then(() => {
     if (opened.length) queue.add(opened);
 });
 
+// Restart to Update arrives here too: electron-updater starts the installer and
+// then calls app.quit(), and the controller only lets it once the queue is idle.
 app.on('before-quit', () => {
     if (queue) queue.stop();
     releaseTempDir();

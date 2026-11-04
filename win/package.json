@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist:win": "electron-builder --win --x64",
+    "dist:win": "electron-builder --win --x64 --publish never",
     "test": "node --test test/*.test.js"
   },
   "devDependencies": {
@@ -19,6 +19,14 @@
     "appId": "com.imageoptim.windows",
     "productName": "ImageOptim",
     "copyright": "ImageOptim contributors",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "carlhauser",
+        "repo": "imageoptim-windows",
+        "releaseType": "release"
+      }
+    ],
     "files": [
       "main.js",
       "preload.js",
@@ -77,9 +85,11 @@
           ]
         }
       ],
-      "icon": "resources/icon.ico"
+      "icon": "resources/icon.ico",
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
@@ -87,5 +97,8 @@
       "installerIcon": "resources/icon.ico",
       "uninstallerIcon": "resources/icon.ico"
     }
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11"
   }
 }

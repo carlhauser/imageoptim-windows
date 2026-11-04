@@ -278,6 +278,42 @@ tr.running .col-name-cell {
 
 #status-savings { color: var(--accent); }
 
+/* ------------------------------------------------------------ update banner */
+
+/* Sits just above the status bar, and only when there is something to act on */
+.update-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 10px;
+    background: var(--bg-raised);
+    border-top: 1px solid var(--border);
+    box-shadow: inset 3px 0 0 var(--accent);
+    flex: 0 0 auto;
+}
+
+.update-banner[hidden] { display: none; }
+
+.update-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.update-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.update-actions:empty { display: none; }
+
+button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+button.primary:hover:not(:disabled) { border-color: var(--text); }
+button.primary:active:not(:disabled) { background: var(--accent-dim); }
+
 /* ------------------------------------------------------------- drop overlay */
 
 /* An id selector outranks the browser's [hidden] rule, so restate it here */
