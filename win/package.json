@@ -1,7 +1,7 @@
 {
   "name": "imageoptim-windows",
   "productName": "ImageOptim",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Windows front-end for the ImageOptim lossless image optimizers",
   "license": "GPL-2.0-or-later",
   "main": "main.js",
