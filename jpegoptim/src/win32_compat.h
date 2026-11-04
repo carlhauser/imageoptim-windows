@@ -20,7 +20,11 @@ extern "C" {
 #include <sys/utime.h>
 
 #define snprintf _snprintf
-#define lstat _stat
+/* _stat is itself a macro on MinGW-w64, expanding to _stat64i32, which takes a
+   struct _stat64i32 and not the struct stat that misc.c declares. Windows has no
+   lstat, so aliasing it to plain stat keeps the types consistent and matches the
+   behaviour this header already intended. */
+#define lstat stat
 
 #define realpath(N,R) _fullpath((R),(N),MAXPATHLEN)
 #define ftruncate(fildes,length) open(fildes, O_TRUNC|O_WRONLY)

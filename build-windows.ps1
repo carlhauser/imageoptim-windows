@@ -366,7 +366,10 @@ if [ -f noautomake.sh ]; then sh noautomake.sh; fi
 # A Makefile is already here - ImageOptim's own stub, which only unpacks the
 # source tarball - so config.status is what says whether configure has run.
 if [ ! -f config.status ]; then
-    ./configure --disable-dependency-tracking CFLAGS='-O2' CXXFLAGS='-O2'
+    # AdvanceCOMP 1.15 is from 2012 and declares dynamic exception
+    # specifications - throw() on a function - which C++17 removed and modern
+    # GCC defaults to rejecting.
+    ./configure --disable-dependency-tracking CFLAGS='-O2' CXXFLAGS='-O2 -std=gnu++98'
 fi
 # automake names the target with the executable suffix, so on Windows the rule
 # is advpng.exe and plain `advpng` has no rule at all.
