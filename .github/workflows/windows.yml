@@ -16,6 +16,8 @@ on:
       - 'build-windows.ps1'
       - 'win/**'
       - '.github/workflows/windows.yml'
+      # Documentation changes should not start a Windows runner
+      - '!win/**.md'
 
 jobs:
   optimizers:

@@ -8,6 +8,8 @@ C, C++, Rust or JavaScript. This directory holds an Electron app that queues
 images, runs the same optimizers with the same command lines, keeps whichever
 output is smallest, and overwrites the original in place.
 
+![ImageOptim running on a folder of mixed images](../docs/screenshots/results-light.png)
+
 ## Building
 
 ### 1. The optimizer executables
