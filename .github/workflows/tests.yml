@@ -22,9 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 24 is what Electron 45 bundles, so the suite runs on the same runtime
+      # as the application.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       # No dependencies are needed: the suite uses node:test and stubs the
       # optimizers, so nothing is spawned and no binaries are required.
