@@ -166,8 +166,8 @@ checks on Windows against the executables each build has just produced.
 repository on a `windows-latest` runner, then packages the app around them with
 electron-builder. It runs on demand and on changes to `build-windows.ps1` or
 `win/`, excluding markdown, because Windows runners bill at twice the rate. A
-`v*` tag runs it too, and then it also publishes the GitHub Release the updater
-reads; see [Releasing](#releasing).
+`v*` tag runs it too, and then it also publishes a GitHub Release; see
+[Releasing](#releasing).
 
 Getting it green took six runs and exposed faults that no amount of reading the
 script on macOS would have found:
@@ -283,10 +283,45 @@ Files are overwritten in place. Keep a copy of anything you cannot regenerate.
 
 ## Updates
 
-The packaged app checks GitHub for a newer release a few seconds after it
-starts, through electron-updater's GitHub provider pointed at
-`carlhauser/imageoptim-windows`. **Help → Check for Updates…** does the same on
-demand.
+**Switched off.** The app carries a complete updater, built on
+electron-updater, but `ENABLED` in `lib/updater.js` is `false`. With it off
+there is no check at startup, no **Check for Updates…** in the Help menu, and
+electron-updater is never loaded. To update, run the newer installer over the
+installed copy.
+
+It is off because `carlhauser/imageoptim-windows` is private. The GitHub
+provider reads `releases.atom`, `latest.yml` and the installer without
+credentials, and a private repository answers all three with 404, so a check
+could never find a release. Building a read-only token into the app would get
+past that, but anyone with the installer could extract the token and read the
+source.
+
+### Turning it on
+
+The releases have to be readable without signing in, while the source can stay
+private: publish them to a separate public repository, say
+`carlhauser/imageoptim-windows-releases`.
+
+1. Create that repository, public, with a README so it has a default branch for
+   the release tags.
+2. Create a fine-grained token with *Contents: read and write* on that
+   repository alone, and save it as an Actions secret, say `RELEASES_TOKEN`, in
+   this one. The workflow's own `GITHUB_TOKEN` cannot write to another
+   repository.
+3. Point everything at it: `repo` under `build.publish` in `package.json`,
+   `REPO` in `lib/updater.js` (a test checks the two agree), and in the
+   workflow's `release` job pass `--repo` with the new repository, use
+   `GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}`, and drop `--verify-tag`, since the
+   tag is created in the other repository. Point the Download link in the root
+   `README.md` there too.
+4. Set `ENABLED = true` and release a new version. Copies installed from
+   releases made with the updater off never check, so that release has to be
+   installed by hand once.
+
+### What it does when on
+
+The packaged app checks for a newer release a few seconds after it starts, and
+**Help → Check for Updates…** does the same on demand.
 
 * **The installed copy** (`ImageOptim-Setup-<version>.exe`) downloads a newer
   version in the background, then shows a bar above the status bar with
@@ -305,11 +340,9 @@ demand.
 
 A background check says nothing when there is no update or GitHub cannot be
 reached; only a check you ask for reports "up to date" or an error. What the
-updater does is logged to `%APPDATA%\ImageOptim\updater.log`.
-
-Releases made before the updater existed (1.4.1 and earlier) cannot update
-themselves: install the first release that has it by hand, and it takes care of
-the rest.
+updater does is logged to `%APPDATA%\ImageOptim\updater.log`. It takes the
+newest release that is neither a draft nor a pre-release, needs `latest.yml` in
+it, and fetches the installer by the name `latest.yml` gives.
 
 ### Unsigned updates
 
@@ -328,15 +361,6 @@ your PC" box is only for the first install, from a browser.
 
 If the app is signed later, drop `verifyUpdateCodeSignature: false`. Copies
 installed from then on accept only updates signed by the same publisher.
-
-### What the repository has to provide
-
-The provider reads `https://github.com/carlhauser/imageoptim-windows/releases.atom`
-and the release assets without credentials, so the repository has to be public.
-A private one answers 404, which a manual check reports as "no public releases"
-and a background check ignores. It takes the newest release that is neither a
-draft nor a pre-release, and needs `latest.yml` in it; the installer is fetched
-by the name `latest.yml` gives.
 
 ## Releasing
 
@@ -364,26 +388,27 @@ by the name `latest.yml` gives.
 
    | file | for |
    | --- | --- |
-   | `ImageOptim-Setup-1.5.0.exe` | new installs, and the update itself |
-   | `ImageOptim-Setup-1.5.0.exe.blockmap` | differential downloads from the next release |
-   | `latest.yml` | what installed copies read: version, file name, sha512 |
+   | `ImageOptim-Setup-1.5.0.exe` | the installer |
    | `ImageOptim-1.5.0-win.zip` | the portable copy |
+   | `ImageOptim-Setup-1.5.0.exe.blockmap` | for the updater: differential downloads |
+   | `latest.yml` | for the updater: version, file name, sha512 |
 
    Release notes are generated from the commits since the previous tag and can
-   be edited on GitHub afterwards.
-
-Installed copies pick the release up on their next start.
+   be edited on GitHub afterwards. The last two files go unused while the
+   updater is off; they are published anyway so that turning it on needs no
+   change here.
 
 The push to `main` starts a second Windows build of the same commit, because
 `win/package.json` changed. Only the tag's run publishes anything, so the other
 can be cancelled from the Actions tab to save the minutes.
 
 A release is published only when every job succeeded. The packaging job still
-runs after a partial optimizer build, so its artifacts can be inspected, but
-installed copies would install a release with missing optimizers by
-themselves. Re-running the workflow for a tag replaces that release's files
-rather than failing. The updater never downgrades, so a bad release is fixed by
-releasing a higher version.
+runs after a partial optimizer build, so its artifacts can be inspected, but a
+release with missing optimizers is not something to hand out - least of all
+once the updater is on and installed copies take releases unattended.
+Re-running the workflow for a tag replaces that release's files rather than
+failing. The updater never downgrades, so a bad release is fixed by releasing a
+higher version.
 
 The installer is named without spaces (`nsis.artifactName`). GitHub turns spaces
 in asset names into dots while `latest.yml` names a dashed copy, so an
@@ -406,7 +431,7 @@ win/
   lib/tools.js          one entry per optimizer, with its exact arguments
   lib/job.js            per-image plan, execution and saving
   lib/queue.js          folder scanning, concurrency, totals
-  lib/updater.js        update checks, install detection, the banner's wording
+  lib/updater.js        the self-updater, switched off: see Updates
   renderer/             the window itself
   resources/bin/        the built executables (created by the build script)
   resources/icon.ico    app icon, converted from imageoptim/ImageOptim.icns

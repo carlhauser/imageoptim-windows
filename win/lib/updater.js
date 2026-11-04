@@ -10,6 +10,14 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 
+// Off while carlhauser/imageoptim-windows is private. The GitHub provider reads
+// releases.atom, latest.yml and the installer without credentials, and a private
+// repository answers all three with 404, so a check could never find anything.
+// main.js neither checks nor shows Check for Updates while this is false.
+// Turning it on needs the releases somewhere public: see "Updates" in
+// win/README.md.
+const ENABLED = false;
+
 const OWNER = 'carlhauser';
 const REPO = 'imageoptim-windows';
 const RELEASES_URL = `https://github.com/${OWNER}/${REPO}/releases`;
@@ -366,6 +374,7 @@ function makeFileLogger(file, { maxBytes = 256 * 1024, now = () => new Date() } 
 }
 
 module.exports = {
+    ENABLED,
     OWNER,
     REPO,
     RELEASES_URL,

@@ -164,9 +164,10 @@ jobs:
         working-directory: win
         run: npm run dist:win
 
-      # latest.yml and the installer's .blockmap are what the updater reads:
+      # latest.yml and the installer's .blockmap are what the updater reads -
       # the version and checksum, and the block hashes for a differential
-      # download from the previous release's installer.
+      # download. Unused while it is switched off (ENABLED in lib/updater.js),
+      # but published so that turning it on needs no change here.
       - name: Upload the installer and portable zip
         if: always()
         uses: actions/upload-artifact@v4
@@ -179,9 +180,10 @@ jobs:
             win/dist/latest.yml
           if-no-files-found: warn
 
-  # Publishes a version tag as a GitHub Release. Installed copies of the app
-  # find it through the releases feed, download the installer named in
-  # latest.yml and verify it against the sha512 there.
+  # Publishes a version tag as a GitHub Release. With the updater on, installed
+  # copies would find it through the releases feed, download the installer
+  # named in latest.yml and verify it against the sha512 there; that needs the
+  # releases in a public repository (see "Updates" in win/README.md).
   release:
     name: Publish the release
     runs-on: ubuntu-latest

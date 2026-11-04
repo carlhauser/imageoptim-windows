@@ -149,10 +149,11 @@ function buildMenu() {
         {
             label: '&Help',
             submenu: [
-                {
+                // Hidden while updates.ENABLED is off (see lib/updater.js)
+                ...(updates.ENABLED ? [{
                     label: 'Check for Updates…',
                     click: () => { if (updateController) updateController.check({ manual: true }); },
-                },
+                }] : []),
                 {
                     label: 'Releases on GitHub',
                     click: () => shell.openExternal(updates.RELEASES_URL),
@@ -281,7 +282,12 @@ async function showUpdateResult(result) {
 // Installed copies download in the background and offer a restart; the
 // unzipped portable copy cannot replace its own files, so it only says that a
 // release exists. A checkout never checks at all.
+//
+// Switched off for now (updates.ENABLED): with no controller, update:state
+// answers null, so the banner never appears and electron-updater is never loaded.
 function setupUpdates() {
+    if (!updates.ENABLED) return;
+
     const kind = updates.installKind({ isPackaged: app.isPackaged, execPath: process.execPath });
 
     let updater = null;

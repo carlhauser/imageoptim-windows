@@ -35,16 +35,13 @@ nothing installed.
 Both are built on a Windows machine in CI, with every optimizer compiled from
 the sources in this repository.
 
-The installed app keeps itself up to date: when a newer release is published it
-downloads it in the background and offers **Restart to Update**, waiting if
-files are being optimized (**Help → Check for Updates…** checks straight away).
-The zip can't replace its own files, so it only tells you a new version is out.
-Releases up to 1.4.1 predate the updater, so install the next one by hand.
+The app does not update itself. To update, run the newer installer over the
+installed copy, or unzip the newer zip in place of the old one; **Help →
+Releases on GitHub** opens the page.
 
 The app is not code-signed, so Windows shows a blue "Windows protected your PC"
 box on first launch — **More info** → **Run anyway**. Unblocking the zip before
-extracting avoids it. Updates install without it: the updater checks each
-download against the checksum published with the release.
+extracting avoids it.
 
 **Files are replaced in place.** Saving is atomic — the result is staged beside
 the original and renamed onto it — and each original is backed up for the session
