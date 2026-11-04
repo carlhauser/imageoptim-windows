@@ -149,7 +149,7 @@ function buildMenu() {
         {
             label: '&Help',
             submenu: [
-                // Hidden while updates.ENABLED is off (see lib/updater.js)
+                // Hidden if updates.ENABLED is ever turned off (lib/updater.js)
                 ...(updates.ENABLED ? [{
                     label: 'Check for Updates…',
                     click: () => { if (updateController) updateController.check({ manual: true }); },
@@ -283,8 +283,8 @@ async function showUpdateResult(result) {
 // unzipped portable copy cannot replace its own files, so it only says that a
 // release exists. A checkout never checks at all.
 //
-// Switched off for now (updates.ENABLED): with no controller, update:state
-// answers null, so the banner never appears and electron-updater is never loaded.
+// With updates.ENABLED off there is no controller: update:state answers null,
+// so the banner never appears and electron-updater is never loaded.
 function setupUpdates() {
     if (!updates.ENABLED) return;
 

@@ -10,13 +10,11 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-// Off while carlhauser/imageoptim-windows is private. The GitHub provider reads
-// releases.atom, latest.yml and the installer without credentials, and a private
-// repository answers all three with 404, so a check could never find anything.
-// main.js neither checks nor shows Check for Updates while this is false.
-// Turning it on needs the releases somewhere public: see "Updates" in
-// win/README.md.
-const ENABLED = false;
+// The GitHub provider reads releases.atom, latest.yml and the installer without
+// credentials, so this works only while carlhauser/imageoptim-windows is
+// public; a private repository answers all three with 404. With this false,
+// main.js neither checks nor shows Check for Updates.
+const ENABLED = true;
 
 const OWNER = 'carlhauser';
 const REPO = 'imageoptim-windows';
