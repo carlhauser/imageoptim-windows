@@ -167,3 +167,12 @@ pngcrush/LICENSE
 /build/
 .build-win/
 node_modules/
+# Built in place by build-windows.ps1 (advpng is built in .build-win now, but
+# older checkouts still have its outputs in advpng/)
+*.exe
+zopfli-png/zopfli/obj/
+advpng/*.o
+advpng/config.log
+advpng/config.status
+advpng/stamp-h1
+advpng/autom4te.cache/

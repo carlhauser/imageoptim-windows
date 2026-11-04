@@ -416,20 +416,31 @@ gcc -O3 -DHAVE_UNISTD_H=1 -DHAVE_GETOPT_H=1 -DHAVE_GETOPT_LONG=1 \
 }
 
 function Build-AdvPng {
+    # Built in a copy under .build-win, not in advpng/ itself. configure writes
+    # its Makefile over advpng/Makefile, which is ImageOptim's own (it unpacks
+    # the source tarball for the macOS build), and make's regeneration rules
+    # rewrote the tracked configure and config.h, leaving the checkout dirty
+    # with this machine's paths in it.
     $code = Invoke-Step -Name 'AdvPNG' -Script @"
-if [ ! -f configure ]; then ./autogen.sh; fi
-# aclocal.m4 and the Makefile.in files look older than their sources here, so
-# make tries to regenerate them and the `missing` wrapper asks for automake 1.9,
-# which no current MSYS2 has. noautomake.sh ships with this tree to touch those
-# files and stop the regeneration.
-if [ -f noautomake.sh ]; then sh noautomake.sh; fi
-# A Makefile is already here - ImageOptim's own stub, which only unpacks the
-# source tarball - so config.status is what says whether configure has run.
-if [ ! -f config.status ]; then
+if [ ! -f .build-win/advpng/config.status ]; then
+    rm -rf .build-win/advpng
+    mkdir -p .build-win/advpng
+    # -p keeps the timestamps, which decide whether make regenerates anything
+    cp -Rp advpng/. .build-win/advpng/
+    cd .build-win/advpng
+    rm -rf Makefile config.status config.log stamp-h1 autom4te.cache *.o advpng.exe
+    if [ ! -f configure ]; then ./autogen.sh; fi
+    # aclocal.m4 and the Makefile.in files look older than their sources, so
+    # make tries to regenerate them and the `missing` wrapper asks for automake
+    # 1.9, which no current MSYS2 has. noautomake.sh ships with the tree to
+    # touch those files and stop the regeneration.
+    if [ -f noautomake.sh ]; then sh noautomake.sh; fi
     # AdvanceCOMP 1.15 is from 2012 and declares dynamic exception
     # specifications - throw() on a function - which C++17 removed and modern
     # GCC defaults to rejecting.
     ./configure --disable-dependency-tracking CFLAGS='-O2' CXXFLAGS='-O2 -std=gnu++98'
+else
+    cd .build-win/advpng
 fi
 # automake names the target with the executable suffix, so on Windows the rule
 # is advpng.exe and plain `advpng` has no rule at all.
@@ -437,11 +448,11 @@ fi
 # (see Test-SelfContained). The old binary goes first so make relinks it.
 rm -f advpng.exe
 make -j$Jobs advpng.exe LDFLAGS=-static
-"@ -WorkingDirectory (Join-Path $RepoRoot 'advpng')
+"@ -WorkingDirectory $RepoRoot
     if ($code -ne 0) { $Results['advpng'] = 'FAILED'; return }
 
     Publish-Artifact -Tool 'advpng' -TargetName 'advpng.exe' -Candidates @(
-        'advpng/advpng.exe', 'advpng/advpng'
+        '.build-win/advpng/advpng.exe'
     ) | Out-Null
 }
 

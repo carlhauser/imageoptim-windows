@@ -1,15 +1,18 @@
-# Builds the optimizers from source on a real Windows machine, then packages the
-# app around them. Until this ran, build-windows.ps1 had never been executed
-# anywhere: it was written on a Mac and only reasoned about.
+# Builds the optimizers from source on a Windows runner with build-windows.ps1,
+# then packages the app around them.
 #
-# Deliberately not run on every push. The from-source build compiles MozJPEG,
-# libpng, Guetzli and three Rust crates, and Windows runners bill at twice the
-# rate of Linux ones.
+# Runs only when the Windows code changes, not on every push. The from-source
+# build compiles MozJPEG, libpng, Guetzli and three Rust crates, and Windows
+# runners bill at twice the rate of Linux ones.
 #
 # Pushing a tag v<version> also publishes the result as a GitHub Release, which
 # is what the app's built-in updater reads (see the release job at the end).
 
 name: Windows build
+
+# Read-only unless a job says otherwise; only the release job writes.
+permissions:
+  contents: read
 
 # A newer push supersedes an older run rather than both compiling in parallel.
 concurrency:
@@ -62,8 +65,11 @@ jobs:
           }
 
       # A current cargo, so the Rust tools are not left to whatever MSYS2 ships.
-      - uses: dtolnay/rust-toolchain@stable
+      # Third-party, so pinned to a commit. Off its stable branch the action
+      # cannot infer the toolchain from the ref, so it is named.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-gnu
 
       - uses: actions/setup-node@v4
@@ -80,7 +86,7 @@ jobs:
       # bin/ left it out of the packaging job, and the resulting app had no SVGO
       # at all - silently, since a missing optimizer is simply skipped.
       - name: Upload the built optimizers
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: optimizers-win-x64
@@ -93,7 +99,7 @@ jobs:
     name: Package the app
     runs-on: windows-latest
     needs: optimizers
-    if: always()
+    if: ${{ !cancelled() }}
     timeout-minutes: 45
 
     steps:
@@ -166,10 +172,9 @@ jobs:
 
       # latest.yml and the installer's .blockmap are what the updater reads -
       # the version and checksum, and the block hashes for a differential
-      # download. Unused while it is switched off (ENABLED in lib/updater.js),
-      # but published so that turning it on needs no change here.
+      # download.
       - name: Upload the installer and portable zip
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: imageoptim-windows
@@ -180,10 +185,9 @@ jobs:
             win/dist/latest.yml
           if-no-files-found: warn
 
-  # Publishes a version tag as a GitHub Release. With the updater on, installed
-  # copies would find it through the releases feed, download the installer
-  # named in latest.yml and verify it against the sha512 there; that needs the
-  # releases in a public repository (see "Updates" in win/README.md).
+  # Publishes a version tag as a GitHub Release. Installed copies find it
+  # through the releases feed, download the installer named in latest.yml and
+  # verify it against the sha512 there (see "Updates" in win/README.md).
   release:
     name: Publish the release
     runs-on: ubuntu-latest

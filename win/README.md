@@ -127,7 +127,6 @@ cd win && npm test
 ```
 
 No dependencies: `node:test` with the optimizers stubbed, so nothing is spawned.
-112 tests across five areas.
 
 `test/arguments.test.js` is the one that matters most. Every optimizer's command
 line is asserted against the macOS worker it was ported from, with the
@@ -169,8 +168,7 @@ electron-builder. It runs on demand and on changes to `build-windows.ps1` or
 `v*` tag runs it too, and then it also publishes a GitHub Release; see
 [Releasing](#releasing).
 
-Getting it green took six runs and exposed faults that no amount of reading the
-script on macOS would have found:
+The first runs exposed faults that reading the script alone had not found:
 
 - `pacman -Syu` terminates its own shell after replacing `msys2-runtime`, so a
   `||` fallback in the same command never executes.
@@ -237,6 +235,13 @@ scheme even in a dark window. Scrollbars use the standard `scrollbar-width` and
 `scrollbar-color` rather than a Chromium feature switch: neither
 `FluentOverlayScrollbar` nor `OverlayScrollbar` changes anything in Chromium 156.
 
+The UI font is Inter, bundled in `renderer/fonts/` (from
+`@fontsource-variable/inter`, SIL Open Font License, `OFL.txt` beside it) so the
+app looks the same on machines without it installed; anything outside Inter's
+scripts falls back to Segoe UI. The accent colour is a hue and saturation from
+Settings → Appearance; `style.css` derives every shade from them in OKLCH at
+fixed lightnesses, so text keeps its contrast whichever colour is picked.
+
 ## Saving safely
 
 The optimized result is staged beside the original and renamed onto it, which is
@@ -283,42 +288,17 @@ Files are overwritten in place. Keep a copy of anything you cannot regenerate.
 
 ## Updates
 
-**Switched off.** The app carries a complete updater, built on
-electron-updater, but `ENABLED` in `lib/updater.js` is `false`. With it off
-there is no check at startup, no **Check for Updates…** in the Help menu, and
-electron-updater is never loaded. To update, run the newer installer over the
-installed copy.
+The app updates itself from this repository's GitHub Releases, through
+electron-updater. The GitHub provider reads `releases.atom`, `latest.yml` and
+the installer without credentials, so it needs the repository to stay public: a
+private one answers all three with 404. `ENABLED` in `lib/updater.js` switches
+the whole thing off - no check at startup, no **Check for Updates…** in the Help
+menu, and electron-updater never loaded.
 
-It is off because `carlhauser/imageoptim-windows` is private. The GitHub
-provider reads `releases.atom`, `latest.yml` and the installer without
-credentials, and a private repository answers all three with 404, so a check
-could never find a release. Building a read-only token into the app would get
-past that, but anyone with the installer could extract the token and read the
-source.
+Copies installed from 1.4.2 or earlier were built with the updater off and never
+check, so the first release with it on has to be installed by hand once.
 
-### Turning it on
-
-The releases have to be readable without signing in, while the source can stay
-private: publish them to a separate public repository, say
-`carlhauser/imageoptim-windows-releases`.
-
-1. Create that repository, public, with a README so it has a default branch for
-   the release tags.
-2. Create a fine-grained token with *Contents: read and write* on that
-   repository alone, and save it as an Actions secret, say `RELEASES_TOKEN`, in
-   this one. The workflow's own `GITHUB_TOKEN` cannot write to another
-   repository.
-3. Point everything at it: `repo` under `build.publish` in `package.json`,
-   `REPO` in `lib/updater.js` (a test checks the two agree), and in the
-   workflow's `release` job pass `--repo` with the new repository, use
-   `GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}`, and drop `--verify-tag`, since the
-   tag is created in the other repository. Point the Download link in the root
-   `README.md` there too.
-4. Set `ENABLED = true` and release a new version. Copies installed from
-   releases made with the updater off never check, so that release has to be
-   installed by hand once.
-
-### What it does when on
+### What it does
 
 The packaged app checks for a newer release a few seconds after it starts, and
 **Help → Check for Updates…** does the same on demand.
@@ -431,7 +411,7 @@ win/
   lib/tools.js          one entry per optimizer, with its exact arguments
   lib/job.js            per-image plan, execution and saving
   lib/queue.js          folder scanning, concurrency, totals
-  lib/updater.js        the self-updater, switched off: see Updates
+  lib/updater.js        the self-updater: see Updates
   renderer/             the window itself
   resources/bin/        the built executables (created by the build script)
   resources/icon.ico    app icon, converted from imageoptim/ImageOptim.icns

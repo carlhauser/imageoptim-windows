@@ -2,10 +2,11 @@
 
 [ImageOptim](https://imageoptim.com) is a GUI for lossless image optimization tools: Zopfli, PNGOUT, [OxiPNG](https://lib.rs/crates/oxipng), AdvPNG, PNGCrush, [JPEGOptim](https://github.com/tjko/jpegoptim), Jpegtran, [Guetzli](https://github.com/google/guetzli), [Gifsicle](https://kornel.ski/lossygif), [SVGO](https://github.com/svg/svgo), [svgcleaner](https://github.com/RazrFalcon/svgcleaner) and [MozJPEG](https://github.com/mozilla/mozjpeg).
 
-This fork adds a **Windows port**. The macOS app's window is Cocoa and does not
-translate, but every optimizer it drives is portable, so `win/` contains a
-replacement front-end that runs them with the same per-format plans and the same
-command-line arguments.
+This repository is [ImageOptim](https://github.com/ImageOptim/ImageOptim) by
+Kornel Lesiński and contributors, with a **Windows port** added. The macOS app's
+window is Cocoa and does not translate, but every optimizer it drives is
+portable, so `win/` contains a replacement front-end that runs them with the
+same per-format plans and the same command-line arguments.
 
 ---
 
@@ -21,7 +22,8 @@ Light and dark follow the system setting.
 ![The same list in dark mode](docs/screenshots/results-dark.png)
 
 Settings turns individual optimizers on and off, controls lossy quality per
-format, and lists which optimizers are actually installed.
+format, sets the accent colour, and lists which optimizers are actually
+installed.
 
 ![The settings panel, showing the optimizer list and quality sliders](docs/screenshots/settings-dark.png)
 
@@ -35,9 +37,11 @@ nothing installed.
 Both are built on a Windows machine in CI, with every optimizer compiled from
 the sources in this repository.
 
-The app does not update itself. To update, run the newer installer over the
-installed copy, or unzip the newer zip in place of the old one; **Help →
-Releases on GitHub** opens the page.
+The installed app updates itself: it checks for a newer release shortly after
+starting (or on **Help → Check for Updates…**), downloads it in the background
+and offers to restart. The zip copy can't replace its own files, so it only says
+that a new version is out; unzip the newer zip in place of the old one. Versions
+up to 1.4.2 don't check yet, so install the next one by hand once.
 
 The app is not code-signed, so Windows shows a blue "Windows protected your PC"
 box on first launch — **More info** → **Run anyway**. Unblocking the zip before
@@ -55,7 +59,7 @@ with MinGW-w64 under MSYS2, and `win/` packages the app around them. See
 plans and the Zopfli size threshold were derived.
 
 The screenshots above were taken on Windows 11 from a real run, and were
-themselves optimized by this build: 37.1% smaller, Zopfli winning all three.
+themselves optimized by this build: 39.1% smaller, Zopfli winning all three.
 
 ---
 
@@ -67,17 +71,16 @@ Requires:
 * [Rust](https://rust-lang.org/) installed via [rustup](https://www.rustup.rs/) (not Homebrew).
 
 ```sh
-git clone --recursive https://imageoptim.com ImageOptim
+git clone https://github.com/carlhauser/imageoptim-windows.git ImageOptim
 cd ImageOptim
 ```
 
-To get started, open `imageoptim/ImageOptim.xcodeproj`. It will automatically download and build all subprojects when run in Xcode.
+The optimizers' sources are included in the repository rather than as git
+submodules, so there is nothing more to fetch.
 
-In case of build errors, these sometimes help:
+To get started, open `imageoptim/ImageOptim.xcodeproj`. It will automatically build all subprojects when run in Xcode.
 
-```sh
-git submodule update --init
-```
+In case of build errors, this sometimes helps:
 
 ```sh
 cd gifsicle # or pngquant
