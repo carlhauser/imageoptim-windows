@@ -216,12 +216,20 @@ function Install-Dependencies {
         'mingw-w64-x86_64-gflags'
     ) -join ' '
 
-    # pacman -Sy on its own is a partial upgrade, which MSYS2 documents as a way
-    # to corrupt an installation. The database and the installed packages have to
-    # move together, and on a stale install the first -Syu may replace pacman
-    # itself and stop early, so it runs twice.
+    # pacman -Sy on its own is a partial upgrade, which MSYS2 documents as a way to
+    # corrupt an installation, so the database and the packages move together with
+    # -Syu. The catch is that when the first pass updates msys2-runtime, pacman
+    # terminates every MSYS2 process - including the shell running it - by design.
+    # A `||` fallback inside that same shell therefore never executes: the process
+    # is already gone. Each pass needs its own invocation.
+    Write-Host ''
+    Write-Host '==> Updating MSYS2 (first pass; may close its own shell)' -ForegroundColor Cyan
+    Invoke-Mingw -Script 'pacman -Syu --noconfirm' | Out-Null
+
+    $code = Invoke-Step -Name 'Updating MSYS2 (second pass)' -Script 'pacman -Syu --noconfirm'
+    if ($code -ne 0) { throw 'MSYS2 could not be brought up to date; re-run the script.' }
+
     $code = Invoke-Step -Name 'Installing MSYS2 build dependencies' -Script @"
-pacman -Syu --noconfirm || pacman -Syu --noconfirm
 pacman -S --noconfirm --needed $packages
 "@
     if ($code -ne 0) { throw 'pacman failed; fix the package installation and re-run.' }

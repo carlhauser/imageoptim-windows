@@ -75,11 +75,23 @@ jobs:
           cache: npm
           cache-dependency-path: win/package-lock.json
 
+      # The build script exits non-zero when any single optimizer fails, but the
+      # app runs with whatever did build, so packaging should still be attempted.
       - name: Collect the optimizers built in the previous job
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: optimizers-win-x64
           path: win/resources/bin/
+
+      - name: Report which optimizers arrived
+        shell: pwsh
+        run: |
+          if (Test-Path win/resources/bin) {
+            Get-ChildItem win/resources/bin | ForEach-Object { Write-Host ("  {0,-16} {1:N0} bytes" -f $_.Name, $_.Length) }
+          } else {
+            Write-Host '  none - packaging an app with no optimizers'
+          }
 
       - name: Install dependencies
         working-directory: win
