@@ -12,8 +12,19 @@
     --border: #3a3a3a;
     --text: #e8e8e8;
     --text-dim: #9a9a9a;
-    --accent: #3b9c4d;
-    --accent-dim: #2a6f38;
+
+    /* The accent is a hue and a chroma, set from Settings (app.js puts them on
+       this element); each shade fixes its own OKLCH lightness, which keeps
+       the contrast against the text and background about the same whatever
+       hue is chosen. The defaults are the shipped blue. */
+    --accent-h: 253;
+    --accent-c: 0.156;
+    --accent-l: 0.64;
+    --accent: oklch(var(--accent-l) var(--accent-c) var(--accent-h));
+    --accent-dim: oklch(0.42 calc(var(--accent-c) * 0.67) var(--accent-h));
+    /* The selected row. Dark, the deep accent carries light text; light, it
+       has to be a pale tint, or the dark text on it can't be read. */
+    --selection: var(--accent-dim);
     --danger: #d05050;
     --radius: 4px;
     --scrollbar-thumb: #4e4e4e;
@@ -28,8 +39,9 @@
         --border: #d4d4d4;
         --text: #1c1c1c;
         --text-dim: #6a6a6a;
-        --accent: #2a8f3c;
-        --accent-dim: #1f7030;
+        --accent-l: 0.515;
+        --accent-dim: oklch(0.44 calc(var(--accent-c) * 0.88) var(--accent-h));
+        --selection: oklch(0.91 calc(var(--accent-c) * 0.23) var(--accent-h));
         --scrollbar-thumb: #c4c4c4;
         --scrollbar-thumb-hover: #a0a0a0;
     }
@@ -64,7 +76,7 @@ body {
     flex-direction: column;
     background: var(--bg);
     color: var(--text);
-    font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    font: 13px/1.45 "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
     user-select: none;
 }
 
@@ -153,7 +165,9 @@ td {
 .col-tool { width: 22%; }
 
 tbody tr:hover { background: var(--bg-hover); }
-tbody tr.selected { background: var(--accent-dim); }
+tbody tr.selected { background: var(--selection); }
+/* The accent on its own darker shade was barely readable */
+tbody tr.selected .savings:not(.none):not(.error) { color: var(--text); }
 
 .savings { color: var(--accent); font-variant-numeric: tabular-nums; }
 .savings.none { color: var(--text-dim); }
@@ -265,6 +279,50 @@ body:has(> #drop-overlay:not([hidden])) #empty-state { visibility: hidden; }
 
 .slider span { color: var(--text-dim); }
 .slider input { grid-column: 1 / 2; width: 100%; }
+
+/* The colour sliders draw their own track, so it can show the colours on
+   offer: every hue for the one, grey to full strength for the other. Sized
+   to match the native sliders above them. */
+.slider input.color-slider {
+    grid-column: 1 / -1;
+    appearance: none;
+    height: 18px;
+    margin: 0;
+    background: transparent;
+}
+
+.color-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+}
+
+.color-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -5px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.hue::-webkit-slider-runnable-track {
+    background: linear-gradient(to right,
+        oklch(var(--accent-l) 0.156 0), oklch(var(--accent-l) 0.156 30),
+        oklch(var(--accent-l) 0.156 60), oklch(var(--accent-l) 0.156 90),
+        oklch(var(--accent-l) 0.156 120), oklch(var(--accent-l) 0.156 150),
+        oklch(var(--accent-l) 0.156 180), oklch(var(--accent-l) 0.156 210),
+        oklch(var(--accent-l) 0.156 240), oklch(var(--accent-l) 0.156 270),
+        oklch(var(--accent-l) 0.156 300), oklch(var(--accent-l) 0.156 330),
+        oklch(var(--accent-l) 0.156 360));
+}
+
+.saturation::-webkit-slider-runnable-track {
+    background: linear-gradient(to right,
+        oklch(var(--accent-l) 0 var(--accent-h)),
+        oklch(var(--accent-l) 0.195 var(--accent-h)));
+}
 .slider output { font-variant-numeric: tabular-nums; }
 
 #tool-list { list-style: none; margin: 0; padding: 0; }
@@ -342,7 +400,7 @@ button.primary:active:not(:disabled) { background: var(--accent-dim); }
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(59, 156, 77, 0.16);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
     border: 2px dashed var(--accent);
     font-size: 17px;
     pointer-events: none;

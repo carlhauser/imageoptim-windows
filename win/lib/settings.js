@@ -65,6 +65,13 @@ const DEFAULTS = {
     // Run Zopfli on everything, with no time budget, the way the macOS app
     // does. Much slower for a fraction of a percent; off by default.
     ThoroughPng: false,
+
+    // The accent colour, as an OKLCH hue in degrees and a saturation in
+    // percent of the strongest chroma offered. The renderer derives every
+    // shade from these at fixed lightnesses, so text stays readable whatever
+    // is picked. The default is the blue the app ships with.
+    AccentHue: 253,
+    AccentSaturation: 80,
 };
 
 class Settings {

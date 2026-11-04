@@ -202,7 +202,20 @@ window.addEventListener('keydown', (event) => {
 
 // -------------------------------------------------------------------- settings
 
+// Saturation 100% is this chroma; past it most hues leave the sRGB gamut at
+// the lightnesses style.css uses. The default 80% gives the shipped blue.
+const MAX_ACCENT_CHROMA = 0.195;
+
+function applyAccent(values) {
+    const root = document.documentElement.style;
+    if ('AccentHue' in values) root.setProperty('--accent-h', String(values.AccentHue));
+    if ('AccentSaturation' in values) {
+        root.setProperty('--accent-c', (values.AccentSaturation / 100 * MAX_ACCENT_CHROMA).toFixed(4));
+    }
+}
+
 function applySettings(values) {
+    applyAccent(values);
     for (const input of settingsEl.querySelectorAll('[data-setting]')) {
         const key = input.dataset.setting;
         if (!(key in values)) continue;
@@ -229,6 +242,8 @@ settingsEl.addEventListener('input', async (event) => {
 
     const output = settingsEl.querySelector(`[data-output="${key}"]`);
     if (output) output.value = value;
+    // Recolour while dragging rather than after the round trip to main
+    applyAccent({ [key]: value });
 
     applySettings(await api.setSettings({ [key]: value }));
 });
