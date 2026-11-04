@@ -456,10 +456,16 @@ function Build-Guetzli {
     # which is dynamic. The resulting exe runs on the build machine, where
     # MSYS2's mingw64\bin is on PATH, and dies with 0xC0000135
     # (STATUS_DLL_NOT_FOUND) anywhere else - including inside the package.
-    # -static pulls libpng, zlib, libstdc++, libgcc and winpthread in, matching
-    # the other ten tools, which are already self-contained.
+    # -static pulls libpng, libstdc++, libgcc and winpthread in, matching the
+    # other ten tools, which are already self-contained.
+    #
+    # zlib has to be named separately. The makefile asks pkg-config for libpng
+    # without --static, so it gets -lpng16 alone, and a statically linked
+    # libpng16.a then has nothing to resolve its own deflate and inflate calls
+    # against. It goes in LIBS rather than LDFLAGS because the generated link
+    # line puts LDFLAGS before -lpng16, and ld resolves left to right.
     $code = Invoke-Step -Name 'Guetzli' -Script @"
-make -j$Jobs LDFLAGS="-static"
+make -j$Jobs LDFLAGS="-static" LIBS="-lz"
 "@ -WorkingDirectory (Join-Path $RepoRoot 'guetzli\guetzli')
     if ($code -ne 0) { $Results['guetzli'] = 'FAILED'; return }
 
