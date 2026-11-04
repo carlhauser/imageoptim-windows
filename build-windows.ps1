@@ -22,6 +22,10 @@
       pngquant    pngquant        pngquant/src       (cargo, statically linked)
       svgcleaner  svgcleaner      svgcleaner/src     (cargo)
       svgo.js     SVGO            svgo/build         (prebuilt bundle, copied)
+      libwebp     libwebp         libwebp            (CMake: cwebp, webpmux)
+      aom         AOM AV1 codec   aom                (CMake, static, linked by libavif)
+      libavif     libavif         libavif            (CMake: avifenc, avifdec; links aom,
+                                                      libpng and MozJPEG)
 
     PNGOUT is deliberately absent: it is a closed-source binary that ImageOptim
     downloads at runtime on macOS and is not redistributable here.
@@ -42,7 +46,9 @@
     Parallel make/ninja jobs. Default: the number of logical processors.
 
 .PARAMETER Clean
-    Delete the intermediate build directory before starting.
+    Delete the intermediate build directory before starting. That includes the
+    AOM library, which is otherwise reused for as long as aom/ and its build
+    flags stay the same.
 
 .EXAMPLE
     .\build-windows.ps1
@@ -71,7 +77,8 @@ if ($Jobs -le 0) { $Jobs = [Environment]::ProcessorCount }
 
 $AllTools = @(
     'libpng', 'mozjpeg', 'jpegoptim', 'advpng', 'gifsicle', 'zopflipng',
-    'pngcrush', 'guetzli', 'oxipng', 'pngquant', 'svgcleaner', 'svgo'
+    'pngcrush', 'guetzli', 'oxipng', 'pngquant', 'svgcleaner', 'svgo',
+    'libwebp', 'aom', 'libavif'
 )
 
 # jpegoptim links against the MozJPEG static library, so asking for jpegoptim
@@ -80,8 +87,13 @@ $Targets = if ($Only.Count) { $Only } else { $AllTools }
 # jpegoptim links MozJPEG's static library and pngcrush links libpng's, so those
 # have to be built first. Moving the dependency to the front rather than only
 # adding it when absent: -Only jpegoptim,mozjpeg used to keep the given order and
-# fail.
-foreach ($pair in @(@('jpegoptim', 'mozjpeg'), @('pngcrush', 'libpng'))) {
+# fail. libavif links all three of aom, libpng and MozJPEG; each pair moves its
+# dependency in front of everything, so all three end up before it.
+$Dependencies = @(
+    @('jpegoptim', 'mozjpeg'), @('pngcrush', 'libpng'),
+    @('libavif', 'aom'), @('libavif', 'libpng'), @('libavif', 'mozjpeg')
+)
+foreach ($pair in $Dependencies) {
     $dependent, $dependency = $pair
     if ($Targets -contains $dependent) {
         $Targets = @($dependency) + ($Targets | Where-Object { $_ -ne $dependency })
@@ -268,7 +280,9 @@ function Install-Dependencies {
         'mingw-w64-x86_64-pkgconf',
         'mingw-w64-x86_64-zlib',
         'mingw-w64-x86_64-libpng',
-        'mingw-w64-x86_64-gflags'
+        'mingw-w64-x86_64-gflags',
+        # AOM generates its CPU dispatch tables with a Perl script
+        'perl'
     ) -join ' '
 
     # pacman -Sy on its own is a partial upgrade, which MSYS2 documents as a way to
@@ -558,6 +572,242 @@ make -j$Jobs LDFLAGS=-static LIBS=-lz
     ) | Out-Null
 }
 
+function Build-LibWebp {
+    # Only cwebp and webpmux. The app hands cwebp nothing but WebP, so the PNG,
+    # JPEG, TIFF and GIF readers are left out (TIFF is already skipped by
+    # WEBP_LINK_STATIC; it is listed in case that changes), and with them any
+    # chance of a MinGW DLL creeping in.
+    #
+    # WIC is off as well. With it, cwebp decodes every input - WebP included -
+    # through the Windows Imaging Component first, so the result depends on
+    # which WebP codec the PC has installed (most Windows 11 machines have the
+    # Store's WebP Image Extensions), and WIC hands back the ICC profile and
+    # nothing else: -metadata all silently lost EXIF and XMP. Without WIC cwebp
+    # uses libwebp's own reader, which carries ICC, EXIF and XMP over byte for
+    # byte. HAVE_WINCODEC_H is the result of the header check, so presetting it
+    # skips the check.
+    $code = Invoke-Step -Name 'libwebp (cwebp, webpmux)' -Script @"
+cmake -G Ninja -S libwebp -B .build-win/libwebp \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_EXE_LINKER_FLAGS=-static \
+    -DWEBP_LINK_STATIC=ON \
+    -DWEBP_BUILD_CWEBP=ON \
+    -DWEBP_BUILD_WEBPMUX=ON \
+    -DWEBP_BUILD_LIBWEBPMUX=ON \
+    -DWEBP_BUILD_DWEBP=OFF \
+    -DWEBP_BUILD_ANIM_UTILS=OFF \
+    -DWEBP_BUILD_GIF2WEBP=OFF \
+    -DWEBP_BUILD_IMG2WEBP=OFF \
+    -DWEBP_BUILD_VWEBP=OFF \
+    -DWEBP_BUILD_WEBPINFO=OFF \
+    -DWEBP_BUILD_EXTRAS=OFF \
+    -DCMAKE_DISABLE_FIND_PACKAGE_PNG=ON \
+    -DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON \
+    -DCMAKE_DISABLE_FIND_PACKAGE_TIFF=ON \
+    -DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON \
+    -DCMAKE_DISABLE_FIND_PACKAGE_OpenGL=ON \
+    -DHAVE_WINCODEC_H=OFF
+cmake --build .build-win/libwebp --parallel $Jobs --target cwebp webpmux
+"@
+    if ($code -ne 0) {
+        $Results['cwebp'] = 'FAILED'
+        $Results['webpmux'] = 'FAILED'
+        return
+    }
+
+    Publish-Artifact -Tool 'cwebp' -TargetName 'cwebp.exe' -Candidates @(
+        '.build-win/libwebp/cwebp.exe'
+    ) | Out-Null
+    Publish-Artifact -Tool 'webpmux' -TargetName 'webpmux.exe' -Candidates @(
+        '.build-win/libwebp/webpmux.exe'
+    ) | Out-Null
+}
+
+# Configure flags for AOM, kept in one place because they are part of the stamp
+# that decides whether an existing build can be reused.
+#
+# AOM_TARGET_CPU is named rather than detected: AOM reads it from
+# CMAKE_SYSTEM_PROCESSOR, which CMake takes from PROCESSOR_ARCHITECTURE, and a
+# MinGW shell started from Git Bash rather than PowerShell does not have that
+# variable. AOM then quietly falls back to its generic C target, with no SIMD
+# at all, and encodes several times slower.
+#
+# Only the library: the apps, examples, tests and tools are off, and so are
+# libyuv and WebM, which only the apps use. Their sources are not vendored.
+#
+# Changing these? Bump the r<N> in the AOM cache key in
+# .github/workflows/windows.yml as well. The stamp already stops CI linking a
+# library built with the old flags, but only a new key lets it save the new one.
+$AomFlags = @(
+    '-DCMAKE_BUILD_TYPE=Release',
+    '-DBUILD_SHARED_LIBS=OFF',
+    '-DAOM_TARGET_CPU=x86_64',
+    '-DENABLE_NASM=ON',
+    '-DENABLE_APPS=OFF',
+    '-DENABLE_DOCS=OFF',
+    '-DENABLE_EXAMPLES=OFF',
+    '-DENABLE_TESTDATA=OFF',
+    '-DENABLE_TESTS=OFF',
+    '-DENABLE_TOOLS=OFF',
+    '-DCONFIG_LIBYUV=0',
+    '-DCONFIG_WEBM_IO=0'
+)
+
+# Identifies an AOM build: the configure flags and the content of every file in
+# aom/. CI restores .build-win/aom-prefix from a cache keyed on aom/** alone, so
+# after a change to the flags above it would otherwise link a library built
+# with the old ones.
+function Get-AomStamp {
+    $root = (Join-Path $RepoRoot 'aom').TrimEnd('\') + '\'
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("flags: $($AomFlags -join ' ')")
+    Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | ForEach-Object {
+        $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+        $lines.Add("$($_.FullName.Substring($root.Length)) $hash")
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '')
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Build-Aom {
+    # A static libaom.a, installed into .build-win/aom-prefix for libavif to
+    # link. It is the largest thing compiled here and changes rarely, so an
+    # existing build is reused for as long as its stamp matches; CI caches the
+    # prefix between runs. -Clean removes it.
+    $prefix = Join-Path $BuildDir 'aom-prefix'
+    $lib = Join-Path $prefix 'lib\libaom.a'
+    $stampFile = Join-Path $prefix 'imageoptim-build-stamp.txt'
+    $stamp = Get-AomStamp
+
+    if ((Test-Path $lib) -and (Test-Path $stampFile) -and
+        ((Get-Content -LiteralPath $stampFile -Raw).Trim() -eq $stamp)) {
+        Write-Host ''
+        Write-Host '==> AOM (static library)' -ForegroundColor Cyan
+        Write-Host '    reusing .build-win/aom-prefix: same sources, same flags' -ForegroundColor Green
+        $Results['aom'] = 'cached'
+        return
+    }
+
+    $prefixMsys = ConvertTo-MsysPath $prefix
+    $flags = $AomFlags -join ' '
+    # The old prefix goes first, so that a failed build leaves nothing behind
+    # for libavif to link rather than the library the stamp just rejected.
+    $code = Invoke-Step -Name 'AOM (static library)' -Script @"
+rm -rf '$prefixMsys'
+cmake -G Ninja -S aom -B .build-win/aom $flags -DCMAKE_INSTALL_PREFIX='$prefixMsys'
+cmake --build .build-win/aom --parallel $Jobs
+cmake --install .build-win/aom
+"@
+    if ($code -ne 0 -or -not (Test-Path $lib)) {
+        if ($code -eq 0) { Write-Host '    AOM built but libaom.a was not installed' -ForegroundColor Red }
+        $Results['aom'] = 'FAILED'
+        return
+    }
+
+    [System.IO.File]::WriteAllText($stampFile, $stamp + "`n")
+    $size = [math]::Round((Get-Item $lib).Length / 1KB)
+    Write-Host "    libaom.a  ($size KB)" -ForegroundColor Green
+    $Results['aom'] = 'built'
+}
+
+function Build-LibAvif {
+    # avifenc and avifdec, with AOM for both encoding and decoding, and libpng,
+    # MozJPEG and zlib for the PNG and JPEG they read and write. libpng and
+    # MozJPEG are the static builds above; zlib is MSYS2's libz.a, the one
+    # libpng and pngcrush already link.
+    $aomPrefix = Join-Path $BuildDir 'aom-prefix'
+    $aomLib = Join-Path $aomPrefix 'lib\libaom.a'
+    $pngBuild = Join-Path $BuildDir 'libpng'
+    $jpegBuild = Join-Path $BuildDir 'mozjpeg'
+    $missing = @()
+    if (-not (Test-Path $aomLib)) { $missing += 'AOM' }
+    if (-not (Get-ChildItem $pngBuild -Filter 'libpng*.a' -ErrorAction SilentlyContinue)) { $missing += 'libpng' }
+    if (-not (Get-ChildItem $jpegBuild -Filter 'libjpeg*.a' -ErrorAction SilentlyContinue)) { $missing += 'MozJPEG' }
+    if ($missing.Count) {
+        Write-Host ''
+        Write-Host '==> libavif' -ForegroundColor Cyan
+        Write-Host "    skipped: $($missing -join ', ') not built" -ForegroundColor Red
+        $Results['avifenc'] = 'FAILED'
+        $Results['avifdec'] = 'FAILED'
+        return
+    }
+
+    # libavif's CMake configures avifgainmaputil along with the apps, and that
+    # links libargparse, which it fetches from GitHub with FetchContent at
+    # configure time. avifgainmaputil is never built here (only the avifenc and
+    # avifdec targets are), so an empty stand-in satisfies the configure step
+    # and keeps the build offline. FETCHCONTENT_FULLY_DISCONNECTED makes any
+    # other download attempt fail rather than happen.
+    $stub = Join-Path $BuildDir 'libavif-no-argparse'
+    New-Item -ItemType Directory -Force -Path $stub | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $stub 'CMakeLists.txt'), @"
+cmake_minimum_required(VERSION 3.10)
+project(libargparse_stand_in NONE)
+add_library(libargparse INTERFACE)
+"@)
+
+    # libpng and MozJPEG are installed into one prefix, so that each has its
+    # generated header (pnglibconf.h, jconfig.h) beside the others: FindPNG and
+    # FindJPEG take a single include directory. Every library is named by path,
+    # because MSYS2's own libpng16.dll.a and libz.dll.a sit on the default search
+    # path and would link the DLLs. PKG_CONFIG_LIBDIR keeps pkg-config to the AOM
+    # just built.
+    $deps = ConvertTo-MsysPath (Join-Path $BuildDir 'libavif-deps')
+    $aom = ConvertTo-MsysPath $aomPrefix
+    $stubMsys = ConvertTo-MsysPath $stub
+    $code = Invoke-Step -Name 'libavif (avifenc, avifdec)' -Script @"
+rm -rf '$deps'
+cmake --install .build-win/libpng --prefix '$deps'
+cmake --install .build-win/mozjpeg --prefix '$deps'
+PKG_CONFIG_LIBDIR='$aom/lib/pkgconfig' cmake -G Ninja -S libavif -B .build-win/libavif \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_EXE_LINKER_FLAGS=-static \
+    -DAVIF_BUILD_APPS=ON \
+    -DAVIF_BUILD_TESTS=OFF \
+    -DAVIF_BUILD_EXAMPLES=OFF \
+    -DAVIF_CODEC_AOM=SYSTEM \
+    -DAVIF_CODEC_DAV1D=OFF \
+    -DAVIF_CODEC_LIBGAV1=OFF \
+    -DAVIF_CODEC_RAV1E=OFF \
+    -DAVIF_CODEC_SVT=OFF \
+    -DAVIF_LIBYUV=OFF \
+    -DAVIF_LIBSHARPYUV=OFF \
+    -DAVIF_LIBXML2=OFF \
+    -DAVIF_JPEG=SYSTEM \
+    -DAVIF_ZLIBPNG=SYSTEM \
+    -DAOM_INCLUDE_DIR='$aom/include' \
+    -DAOM_LIBRARY='$aom/lib/libaom.a' \
+    -DPNG_PNG_INCLUDE_DIR='$deps/include' \
+    -DPNG_LIBRARY='$deps/lib/libpng16.a' \
+    -DJPEG_INCLUDE_DIR='$deps/include' \
+    -DJPEG_LIBRARY='$deps/lib/libjpeg.a' \
+    -DZLIB_INCLUDE_DIR=/mingw64/include \
+    -DZLIB_LIBRARY=/mingw64/lib/libz.a \
+    -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+    -DFETCHCONTENT_SOURCE_DIR_LIBARGPARSE='$stubMsys'
+cmake --build .build-win/libavif --parallel $Jobs --target avifenc avifdec
+"@
+    if ($code -ne 0) {
+        $Results['avifenc'] = 'FAILED'
+        $Results['avifdec'] = 'FAILED'
+        return
+    }
+
+    Publish-Artifact -Tool 'avifenc' -TargetName 'avifenc.exe' -Candidates @(
+        '.build-win/libavif/avifenc.exe'
+    ) | Out-Null
+    Publish-Artifact -Tool 'avifdec' -TargetName 'avifdec.exe' -Candidates @(
+        '.build-win/libavif/avifdec.exe'
+    ) | Out-Null
+}
+
 function Build-CargoTool {
     param(
         [Parameter(Mandatory)] [string] $Tool,
@@ -648,6 +898,9 @@ foreach ($tool in $Targets) {
         'pngquant'   { Build-CargoTool -Tool 'pngquant'   -Directory 'pngquant/src' -ExtraArgs '--no-default-features --features=static,z-static' }
         'svgcleaner' { Build-CargoTool -Tool 'svgcleaner' -Directory 'svgcleaner/src' }
         'svgo'       { Build-Svgo }
+        'libwebp'    { Build-LibWebp }
+        'aom'        { Build-Aom }
+        'libavif'    { Build-LibAvif }
     }
 }
 
@@ -656,7 +909,7 @@ Write-Host 'Summary' -ForegroundColor White
 $failed = 0
 foreach ($key in $Results.Keys) {
     $state = $Results[$key]
-    if ($state -eq 'built') {
+    if ($state -eq 'built' -or $state -eq 'cached') {
         Write-Host ("  {0,-12} {1}" -f $key, $state) -ForegroundColor Green
     } else {
         Write-Host ("  {0,-12} {1}" -f $key, $state) -ForegroundColor Red

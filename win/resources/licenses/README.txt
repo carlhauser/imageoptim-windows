@@ -22,6 +22,13 @@ the source in that repository, and keeps its own license:
   svgcleaner.exe   svgcleaner               GPL v2                svgcleaner-LICENSE.txt
   svgo.js          SVGO and its bundled     MIT, see notices      svgo-LICENSE.txt, svgo-bundle-notices.txt
                    dependencies
+  cwebp.exe        libwebp                  BSD-3, patent grant   libwebp-COPYING.txt, libwebp-PATENTS.txt
+  webpmux.exe
+  avifenc.exe      libavif                  BSD-2, see notices    libavif-LICENSE.txt
+  avifdec.exe      (with AOM)               BSD-2, patent grant   aom-LICENSE.txt, aom-PATENTS.txt,
+                                                                  aom-third-party-notices.txt
+                   (with libpng, MozJPEG    libpng, IJG, BSD-3,   libpng-LICENSE.txt, mozjpeg-LICENSE.md,
+                   and zlib)                zlib                  mozjpeg-README.ijg.txt, zlib-LICENSE.txt
 
 The interface font is Inter, under the SIL Open Font License 1.1: Inter-OFL.txt.
 The interface icons are Microsoft's Fluent UI System Icons, under the MIT

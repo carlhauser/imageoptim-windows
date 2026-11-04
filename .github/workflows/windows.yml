@@ -2,8 +2,8 @@
 # then packages the app around them.
 #
 # Runs only when the Windows code changes, not on every push. The from-source
-# build compiles MozJPEG, libpng, Guetzli and three Rust crates, and Windows
-# runners bill at twice the rate of Linux ones.
+# build compiles MozJPEG, libpng, Guetzli, libwebp, AOM, libavif and three Rust
+# crates, and Windows runners bill at twice the rate of Linux ones.
 #
 # Pushing a tag v<version> also publishes the result as a GitHub Release, which
 # is what the app's built-in updater reads (see the release job at the end).
@@ -76,9 +76,31 @@ jobs:
         with:
           node-version: 24
 
+      # The AOM AV1 library that avifenc and avifdec link is the biggest single
+      # compile here and changes only when aom/ does. build-windows.ps1 reuses a
+      # restored prefix only if the stamp inside it matches both aom/ and the
+      # script's configure flags, so a cache that has gone stale is rebuilt, not
+      # linked. A stale hit is never saved over, though, so r1 is bumped whenever
+      # $AomFlags in build-windows.ps1 changes. Restore and save are separate
+      # steps so that the library is saved even when some other optimizer fails
+      # the build step.
+      - name: Restore the AOM library
+        id: aom-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .build-win/aom-prefix
+          key: aom-prefix-win-x64-r1-${{ hashFiles('aom/**') }}
+
       - name: Build the optimizers
         shell: pwsh
         run: .\build-windows.ps1
+
+      - name: Save the AOM library
+        if: ${{ !cancelled() && steps.aom-cache.outputs.cache-hit != 'true' && hashFiles('.build-win/aom-prefix/lib/libaom.a') != '' }}
+        uses: actions/cache/save@v5
+        with:
+          path: .build-win/aom-prefix
+          key: aom-prefix-win-x64-r1-${{ hashFiles('aom/**') }}
 
       # Wanted even on a partial build: the summary says which tools failed, and
       # the app runs with whatever did build.

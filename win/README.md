@@ -21,8 +21,8 @@ Run from a PowerShell prompt at the repository root, on Windows:
 ```
 
 It needs [MSYS2](https://www.msys2.org/) (`winget install -e --id MSYS2.MSYS2`),
-installs the MinGW-w64 toolchain, CMake, Ninja, NASM, zlib, libpng and gflags
-through `pacman`, and writes the results to `win\resources\bin`.
+installs the MinGW-w64 toolchain, CMake, Ninja, NASM, Perl, zlib, libpng and
+gflags through `pacman`, and writes the results to `win\resources\bin`.
 
 Rust comes from `rustup` when it is on PATH, otherwise from the MSYS2 package.
 Either way the Rust tools are built for `x86_64-pc-windows-gnu`, so the whole
@@ -41,6 +41,65 @@ Useful flags:
 A tool that fails to build is reported in the summary and the script carries on;
 the front-end skips optimizers whose executable is absent, so a partial build
 still runs with fewer optimizers.
+
+#### WebP and AVIF codecs
+
+The script also builds `cwebp.exe` and `webpmux.exe` from libwebp, and
+`avifenc.exe` and `avifdec.exe` from libavif. libavif uses AOM for both encoding
+and decoding and links the libpng and MozJPEG built above. The app does not run
+any of the four yet.
+
+```powershell
+.\build-windows.ps1 -Only libwebp,aom,libavif -SkipBootstrap
+```
+
+Their sources are plain directories at the repository root, like the other
+optimizers, trimmed to what this build compiles:
+
+| directory | release | source |
+| --- | --- | --- |
+| `libwebp/` | 1.6.0 | `libwebp-1.6.0.tar.gz` from `storage.googleapis.com/downloads.webmproject.org/releases/webp/` |
+| `aom/` | 3.15.3 | `libaom-3.15.3.tar.gz` from `storage.googleapis.com/aom-releases/` |
+| `libavif/` | 1.4.2 | tag `v1.4.2` of `github.com/AOMediaCodec/libavif` |
+
+Removed from all three: tests and test data, documentation, the autotools,
+Android, Gradle, JavaScript and SWIG builds, and editor and CI configuration.
+Also libwebp's extras and sample image; AOM's apps, examples and tools, its Arm,
+PowerPC and RISC-V SIMD code, and the third-party libraries only those use
+(googletest, libyuv, libwebm, highway); and libavif's examples and Android
+bindings. libwebp keeps `configure.ac`, which its CMake reads the version from,
+and AOM keeps the `.cmake` files in `test/`, which its CMakeLists includes.
+Nothing that was kept has been edited, so an update is the new release unpacked
+with the same parts removed.
+
+Things about this build that the flags alone do not explain:
+
+- **cwebp is built without WIC.** With the Windows Imaging Component compiled
+  in, cwebp decodes every input through it first, WebP included. The result then
+  depends on which WebP codec the PC happens to have (most Windows 11 machines
+  have the Store's WebP Image Extensions), and WIC returns the ICC profile and
+  nothing else, so `-metadata all` silently dropped EXIF and XMP. libwebp's own
+  reader carries ICC, EXIF and XMP over byte for byte. The PNG, JPEG, TIFF and
+  GIF readers are off too; cwebp is only ever given WebP.
+- **libavif's configure step would download libargparse.** It sets up
+  `avifgainmaputil` along with the apps, and that tool links libargparse, which
+  CMake fetches from GitHub. Only the `avifenc` and `avifdec` targets are built,
+  so the script points FetchContent at an empty stand-in in
+  `.build-win\libavif-no-argparse` and disconnects it, which keeps the build
+  offline.
+- **`AOM_TARGET_CPU=x86_64` is named, not detected.** AOM reads the CPU from
+  `CMAKE_SYSTEM_PROCESSOR`, which CMake takes from `PROCESSOR_ARCHITECTURE`. A
+  MinGW shell started from Git Bash rather than PowerShell does not have that
+  variable, and AOM then quietly builds its generic C target with no SIMD.
+- **AOM is reused.** It is the biggest compile here: just under two minutes with
+  `-Jobs 4` on a 16-core desktop, and more on CI's four-core runner.
+  `.build-win\aom-prefix` holds a stamp made of the configure flags and a hash
+  of every file in `aom\`, and a later run links the library there for as long
+  as the stamp matches. `-Clean` rebuilds it.
+
+Every one of the four executables passes `Test-SelfContained`: each imports only
+Windows' own DLLs. avifenc and avifdec are about 12 MB each, nearly all of it
+AOM, since each carries both its encoder and decoder.
 
 ### 2. The application
 
@@ -167,6 +226,12 @@ electron-builder. It runs on demand and on changes to `build-windows.ps1` or
 `win/`, excluding markdown, because Windows runners bill at twice the rate. A
 `v*` tag runs it too, and then it also publishes a GitHub Release; see
 [Releasing](#releasing).
+
+The AOM library is cached between runs with `actions/cache`, keyed on a hash of
+`aom/**`. The build script checks the stamp in the restored prefix as it does
+locally, so a cache whose flags no longer match is rebuilt rather than linked.
+Because a stale hit is not saved over, the `r1` in the key is bumped whenever
+`$AomFlags` in `build-windows.ps1` changes.
 
 The first runs exposed faults that reading the script alone had not found:
 
