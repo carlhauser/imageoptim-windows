@@ -201,25 +201,41 @@ button.primary:active:not(:disabled) { background: color-mix(in oklch, var(--acc
 }
 
 .toolbar-group { display: flex; gap: 2px; }
-.toolbar-spacer { flex: 1 1 auto; }
+.toolbar-spacer { flex: 1 1 auto; min-width: 8px; }
 
 .toolbar-divider {
+    flex: none;
     width: 1px;
     height: 20px;
     margin: 0 6px;
     background: var(--stroke-strong);
 }
 
-/* A command bar: plain buttons are flat until hovered */
-.toolbar button:not(.primary) {
+/* The commands: square icon buttons, as tall as the tabs beside them. Plain
+   ones are flat until hovered; Add files keeps the accent fill. */
+button.command {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+}
+
+button.command .icon { width: 20px; height: 20px; }
+
+button.command:not(.primary) {
     background: transparent;
     box-shadow: none;
 }
 
-.toolbar button:not(.primary):hover:not(:disabled) { background: var(--control-hover); }
-.toolbar button:not(.primary):active:not(:disabled) { background: var(--control-active); }
-.toolbar .icon { width: 18px; height: 18px; }
-.toolbar button:not(.primary) .icon { color: var(--text-dim); }
+button.command:not(.primary):hover:not(:disabled) { background: var(--control-hover); }
+button.command:not(.primary):active:not(:disabled) { background: var(--control-active); }
+
+button.command:not(.primary) .icon {
+    color: var(--text-dim);
+    transition: color 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+button.command:not(.primary):hover:not(:disabled) .icon { color: var(--text); }
 
 #toggle-settings[aria-expanded="true"] {
     background: var(--control-hover);
@@ -228,18 +244,19 @@ button.primary:active:not(:disabled) { background: color-mix(in oklch, var(--acc
 
 #toggle-settings[aria-expanded="true"] .icon { color: var(--accent); }
 
-/* Narrower, the buttons keep their icons and lose their labels (each still
-   has its aria-label and a tooltip); only Add Files keeps its label until the
-   window is narrower still. */
-@media (max-width: 700px) {
-    .toolbar button:not(.primary) .label { display: none; }
-    .toolbar button:not(.primary) { padding: 0 9px; }
-}
+/* Narrow, the tabs keep their icons and counts; the names stay readable to
+   screen readers, and each tab has a tooltip. */
+@media (max-width: 560px) {
+    .list-tabs .tab-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+    }
 
-@media (max-width: 460px) {
-    .toolbar button.primary .label { display: none; }
-    .toolbar button.primary { padding: 0 9px; }
-    .toolbar-divider { margin: 0 2px; }
+    .toolbar-divider { margin: 0 3px; }
 }
 
 /* --------------------------------------------------------------- file table */
@@ -279,10 +296,11 @@ main {
     display: none;
 }
 
-/* .tabs.list-tabs, to outrank the settings tabs' rules further down */
+/* Queue / Done, at the left of the toolbar. .tabs.list-tabs, to outrank the
+   settings tabs' rules further down. */
 .tabs.list-tabs {
-    align-self: flex-start;
-    margin: 10px 12px 4px;
+    flex: none;
+    margin: 0;
 }
 
 .tabs.list-tabs [role="tab"] {
@@ -399,12 +417,19 @@ tbody tr.selected { background-color: var(--selection); }
 
 tbody tr.selected .savings:not(.none):not(.error) { color: var(--selection-accent); }
 
-/* A thin progress line along the bottom of the row while it runs */
+/* A thin progress line along the bottom of the row while it runs, over a
+   faint track that shows where it ends. It moves once a second (main.js), so
+   it glides between updates rather than stepping. */
 tbody tr.running {
-    background-image: linear-gradient(var(--accent), var(--accent));
+    background-image:
+        linear-gradient(var(--accent), var(--accent)),
+        linear-gradient(var(--stroke-strong), var(--stroke-strong));
     background-repeat: no-repeat;
-    background-size: var(--progress, 0%) 2px;
-    background-position: left bottom;
+    background-size: var(--progress, 0%) 2px, 100% 2px;
+    background-position: left bottom, left bottom;
+    transition-property: background-color, background-size;
+    transition-duration: 100ms, 1s;
+    transition-timing-function: ease, linear;
 }
 
 /* State icon before each name */
@@ -420,7 +445,8 @@ tbody tr.running {
 }
 
 tr[data-state="done"] .state { --icon: url(icons/state-done.svg); color: var(--accent); }
-tr[data-state="unchanged"] .state { --icon: url(icons/state-unchanged.svg); }
+tr[data-state="unchanged"] .state,
+tr[data-state="skipped"] .state { --icon: url(icons/state-unchanged.svg); }
 tr[data-state="queued"] .state { --icon: url(icons/state-queued.svg); }
 tr[data-state="reverted"] .state { --icon: url(icons/state-reverted.svg); color: var(--text-dim); }
 tr[data-state="stopped"] .state { --icon: url(icons/stop.svg); }
@@ -840,6 +866,34 @@ input[type="range"].saturation::-webkit-slider-runnable-track {
 }
 
 #status-savings { color: var(--accent); font-weight: 500; }
+
+.status-bar { position: relative; }
+
+/* Along the top edge of the status bar, over its dividing line */
+.batch-progress {
+    position: absolute;
+    top: -1px;
+    left: 0;
+    right: 0;
+    height: 3px;
+    overflow: hidden;
+    background: color-mix(in oklch, var(--accent) 18%, transparent);
+}
+
+.batch-progress[hidden] { display: none; }
+
+.batch-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    transform-origin: left center;
+    transform: scaleX(var(--fraction, 0));
+    transition: transform 1s linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .batch-progress-fill,
+    tbody tr.running { transition: none; }
+}
 
 /* ------------------------------------------------------------ update banner */
 

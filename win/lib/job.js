@@ -6,7 +6,9 @@ const path = require('path');
 const { EventEmitter } = require('events');
 
 const tools = require('./tools');
-const { detectType, isSmall, PNG, JPEG, GIF, SVG } = require('./filetype');
+const { hashFile, statKey, profileFor, satisfies } = require('./history');
+const { keepOriginal, removeIfEmpty } = require('./originals');
+const { detectType, typeFromExtension, isSmall, PNG, JPEG, GIF, SVG } = require('./filetype');
 
 let tempCounter = 0;
 let tempRoot = null;
@@ -82,6 +84,11 @@ class Job extends EventEmitter {
         this.name = path.basename(filePath);
         this.resolveTool = options.resolveTool;
         this.semaphore = options.semaphore;
+        // From the queue: how far along this file is by time, or null
+        this.estimate = options.estimate || null;
+        this.history = options.history || null; // lib/history.js, if any
+        this.force = false; // Again: optimize even if already optimized
+        this.inputHash = null;
 
         this.type = null;
         this.originalSize = 0;
@@ -89,6 +96,12 @@ class Job extends EventEmitter {
         this.bestPath = null;      // temp file holding the best result so far
         this.bestTool = null;
         this.backupPath = null;    // pre-optimization copy, for Revert
+        // Keep originals: backupPath is then the copy in "ImageOptim
+        // originals", which belongs to the user and is never deleted
+        this.backupIsKept = false;
+        this.keptCreated = false;  // false: an identical copy was already there
+        this.keptSize = 0;
+        this.keptMtimeMs = 0;
         this.lastSavedSize = 0;    // size we last wrote, to spot outside edits
         this.lastSavedMtimeMs = 0; // and when, to spot a same-size edit
         this.isRunning = false;
@@ -97,6 +110,70 @@ class Job extends EventEmitter {
         this.error = null;
         this.toolsTotal = 0;
         this.toolsDone = 0;
+        this.shownProgress = 0;
+    }
+
+    // How far along the row's progress line is. Counting finished optimizers
+    // alone barely moves for a PNG - Zopfli runs on its own first and takes
+    // most of the time - so once the queue can estimate this file the line
+    // follows the clock, stopping short of the end until the file is done.
+    // It never moves backwards within a run, even when the estimate grows.
+    progressFraction() {
+        if (this.state !== 'running') return this.toolsTotal ? this.toolsDone / this.toolsTotal : 0;
+        const byTools = this.toolsTotal ? (this.toolsDone / this.toolsTotal) * 0.95 : 0;
+        const byTime = this.estimate ? Math.min(0.95, this.estimate(this) || 0) : 0;
+        this.shownProgress = Math.max(this.shownProgress, byTools, byTime);
+        return this.shownProgress;
+    }
+
+    // Already optimized, as found in the history: nothing to do. A later Again
+    // starts one effort level up, as it would after a run.
+    markSkipped() {
+        this.runCount = Math.max(1, this.runCount);
+        this.bestSize = this.bestSize || this.originalSize;
+        this.setState('skipped');
+    }
+
+    // Records the file as it now is on disk as optimized with these settings.
+    // hash: the content's hash when already known. Never fails the job.
+    async remember(settings, level, hash = null) {
+        if (!this.history) return;
+        try {
+            const stat = fs.statSync(this.filePath);
+            const contentHash = hash || await hashFile(this.filePath);
+            this.history.record({
+                hash: contentHash,
+                key: statKey(this.filePath, stat),
+                type: this.type,
+                profile: profileFor(this.type, settings, { level }),
+            });
+        } catch (err) {
+            console.warn('Could not remember an optimized file:', err.message);
+        }
+    }
+
+    // Zopfli and Guetzli, which decide how long a file takes. planTools and
+    // costClass both ask these, so the estimate can't drift from the plan.
+    zopfliPlanned(settings, size) {
+        if (!settings.ZopfliEnabled) return false;
+        const skipAbove = settings.ThoroughPng ? 0 : Number(settings.ZopfliSkipAboveKB) * 1024;
+        return !skipAbove || size <= skipAbove;
+    }
+
+    guetzliPlanned(settings) {
+        return this.runCount === 0 && tools.byId('guetzli').enabled(settings);
+    }
+
+    // Files in the same class take about the same time for their size; see
+    // lib/eta.js. Before the run the type comes from the extension.
+    costClass(settings) {
+        const type = this.type || typeFromExtension(this.filePath) || 'other';
+        const size = this.bestSize || this.originalSize;
+        const parts = [type];
+        if (type === PNG && this.zopfliPlanned(settings, size)) parts.push('zopfli');
+        if (type === JPEG && this.guetzliPlanned(settings)) parts.push('guetzli');
+        if (settings.LossyEnabled) parts.push('lossy');
+        return parts.join('+');
     }
 
     get percentOptimized() {
@@ -125,7 +202,7 @@ class Job extends EventEmitter {
             bestTool: this.bestTool,
             state: this.state,
             error: this.error,
-            progress: this.toolsTotal ? this.toolsDone / this.toolsTotal : 0,
+            progress: this.progressFraction(),
             canRevert: this.canRevert,
         };
     }
@@ -182,14 +259,11 @@ class Job extends EventEmitter {
             if (settings.AdvPngEnabled && settings.PngOutRemoveChunks) {
                 plan.push({ tool: tools.byId('advpng') });
             }
-            if (settings.ZopfliEnabled) {
-                const skipAbove = settings.ThoroughPng ? 0 : Number(settings.ZopfliSkipAboveKB) * 1024;
-                if (!skipAbove || this.bestSize <= skipAbove) {
-                    plan.push({ tool: tools.byId('zopflipng'), alternativeStrategy: hasBeenRunBefore });
-                }
+            if (this.zopfliPlanned(settings, this.bestSize)) {
+                plan.push({ tool: tools.byId('zopflipng'), alternativeStrategy: hasBeenRunBefore });
             }
         } else if (this.type === JPEG) {
-            if (!lossyConverted && !hasBeenRunBefore && tools.byId('guetzli').enabled(settings)) {
+            if (!lossyConverted && this.guetzliPlanned(settings)) {
                 plan.push({ tool: tools.byId('guetzli') });
                 lossyConverted = true;
             }
@@ -291,6 +365,7 @@ class Job extends EventEmitter {
     }
 
     async doRun(settings, signal) {
+        this.shownProgress = 0;
         this.setState('running');
 
         let header;
@@ -332,8 +407,7 @@ class Job extends EventEmitter {
         if (!this.runCount || changedExternally) {
             this.originalSize = currentSize;
             if (changedExternally) {
-                unlinkQuietly(this.backupPath);
-                this.backupPath = null;
+                this.dropBackup();
             }
         }
         this.bestSize = currentSize;
@@ -351,9 +425,34 @@ class Job extends EventEmitter {
             return;
         }
 
-        const { runFirst, runLater } = this.planTools(settings);
+        // Optimized before - by an earlier run, in this session or another -
+        // at least as thoroughly as these settings would: leave it alone.
+        const force = this.force;
+        this.force = false;
+        this.inputHash = null;
+        if (this.history) {
+            try {
+                this.inputHash = await hashFile(this.filePath, signal);
+            } catch (err) {
+                if (signal.aborted) {
+                    this.setState('stopped');
+                    return;
+                }
+            }
+            if (!force && settings.SkipOptimized
+                && satisfies(this.history.findByHash(this.inputHash), profileFor(this.type, settings))) {
+                this.markSkipped();
+                return;
+            }
+        }
+
+        const { runFirst, runLater, level } = this.planTools(settings);
         this.toolsTotal = runFirst.length + runLater.length;
         this.toolsDone = 0;
+        // What the queue learns this file's duration under, now that the
+        // header has been read
+        this.costClassName = this.costClass(settings);
+        this.costBytes = currentSize;
 
         if (!this.toolsTotal) {
             this.setState('error', 'All necessary tools have been disabled in Preferences');
@@ -405,15 +504,29 @@ class Job extends EventEmitter {
         this.runCount += 1;
 
         if (!this.bestPath) {
-            this.setState('done'); // nothing beat what is already on disk
+            // Nothing beat what is already on disk, which is therefore as
+            // optimized as these settings make it - unless it changed meanwhile.
+            if (this.unchangedSinceStart()) await this.remember(settings, level, this.inputHash);
+            this.setState('done');
             return;
         }
 
         try {
             this.save(settings);
-            this.setState('done');
         } catch (err) {
             this.setState('error', `Optimized file could not be saved: ${err.message}`);
+            return;
+        }
+        await this.remember(settings, level);
+        this.setState('done');
+    }
+
+    unchangedSinceStart() {
+        try {
+            this.assertUnchangedSinceStart();
+            return true;
+        } catch (err) {
+            return false;
         }
     }
 
@@ -475,8 +588,22 @@ class Job extends EventEmitter {
         this.assertUnchangedSinceStart();
 
         if (!this.backupPath) {
-            this.backupPath = tempPath('backup');
-            fs.copyFileSync(this.filePath, this.backupPath);
+            // A file this app wrote itself has no original of its own to keep:
+            // that was kept, or not, when it was first optimized.
+            const ownOutput = Boolean(this.history && this.history.findByHash(this.inputHash));
+            if (settings.KeepOriginals && !ownOutput) {
+                // Throws if the copy can't be made, before anything is written
+                const kept = keepOriginal(this.filePath, { atime: this.atime, mtime: this.mtime });
+                const stat = fs.statSync(kept.path);
+                this.backupPath = kept.path;
+                this.backupIsKept = true;
+                this.keptCreated = kept.created;
+                this.keptSize = stat.size;
+                this.keptMtimeMs = stat.mtimeMs;
+            } else {
+                this.backupPath = tempPath('backup');
+                fs.copyFileSync(this.filePath, this.backupPath);
+            }
         }
 
         this.replaceOriginal(this.bestPath, settings);
@@ -511,9 +638,38 @@ class Job extends EventEmitter {
             return { ok: false, reason: 'the file is no longer there' };
         }
 
-        this.replaceOriginal(this.backupPath, settings);
-        unlinkQuietly(this.backupPath);
+        if (this.backupIsKept) {
+            // Only the copy as it was kept can go back: anything else there is
+            // the user's, and putting it over the file could lose both.
+            try {
+                const kept = fs.statSync(this.backupPath);
+                if (kept.size !== this.keptSize || kept.mtimeMs !== this.keptMtimeMs) {
+                    return { ok: false, reason: 'its copy in the ImageOptim originals folder has been changed' };
+                }
+            } catch (err) {
+                return { ok: false, reason: 'its copy in the ImageOptim originals folder is gone' };
+            }
+
+            if (this.keptCreated) {
+                // Moved back whole, so the file gets its exact bytes and dates
+                // again, and the folder doesn't keep a copy nobody needs.
+                try {
+                    fs.renameSync(this.backupPath, this.filePath);
+                } catch (err) {
+                    this.replaceOriginal(this.backupPath, settings);
+                    unlinkQuietly(this.backupPath);
+                }
+                removeIfEmpty(path.dirname(this.backupPath));
+            } else {
+                // The copy was there before this run, so it stays
+                this.replaceOriginal(this.backupPath, settings);
+            }
+        } else {
+            this.replaceOriginal(this.backupPath, settings);
+            unlinkQuietly(this.backupPath);
+        }
         this.backupPath = null;
+        this.backupIsKept = false;
         this.bestSize = this.originalSize;
         this.lastSavedSize = 0;
         this.lastSavedMtimeMs = 0;
@@ -528,8 +684,15 @@ class Job extends EventEmitter {
     cleanup() {
         unlinkQuietly(this.bestPath);
         this.bestPath = null;
-        unlinkQuietly(this.backupPath);
+        this.dropBackup();
+    }
+
+    // Forgets the backup, deleting it only if it is the session's temp copy.
+    // A kept original is never deleted.
+    dropBackup() {
+        if (!this.backupIsKept) unlinkQuietly(this.backupPath);
         this.backupPath = null;
+        this.backupIsKept = false;
     }
 }
 

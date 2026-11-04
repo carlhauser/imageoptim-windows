@@ -9,48 +9,49 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <!-- One bar: the file list's tabs on the left, the commands on the right.
+         The commands are icons only; aria-label names each one, and title
+         gives it a tooltip with its shortcut from the menu. -->
     <header class="toolbar">
-        <!-- The labels hide in a narrow window, leaving the icons: aria-label
-             keeps each button named, and title gives it a tooltip. -->
-        <div class="toolbar-group">
-            <button id="add-files" type="button" class="primary" aria-label="Add Files" title="Add files">
-                <span class="icon i-add-files" aria-hidden="true"></span><span class="label">Add Files</span>
+        <!-- Files waiting or being optimized, and files that are finished
+             (optimized, already optimal, failed, reverted or stopped). -->
+        <div class="tabs list-tabs" role="tablist" aria-label="Files">
+            <button type="button" role="tab" id="view-queue" data-view="queue" aria-controls="file-table" aria-selected="true" title="Files waiting or being optimized">
+                <span class="icon i-queue" aria-hidden="true"></span><span class="tab-label">Queue</span><span class="count" id="count-queue">0</span>
             </button>
-            <button id="add-folder" type="button" aria-label="Add Folder" title="Add a folder">
-                <span class="icon i-add-folder" aria-hidden="true"></span><span class="label">Add Folder</span>
+            <button type="button" role="tab" id="view-done" data-view="done" aria-controls="file-table" aria-selected="false" tabindex="-1" title="Finished files">
+                <span class="icon i-done" aria-hidden="true"></span><span class="tab-label">Done</span><span class="count" id="count-done">0</span>
+            </button>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group">
+            <button id="add-files" type="button" class="command primary" aria-label="Add files" title="Add files (Ctrl+O)">
+                <span class="icon i-add-files" aria-hidden="true"></span>
+            </button>
+            <button id="add-folder" type="button" class="command" aria-label="Add a folder" title="Add a folder (Ctrl+Shift+O)">
+                <span class="icon i-add-folder" aria-hidden="true"></span>
             </button>
         </div>
         <div class="toolbar-divider" aria-hidden="true"></div>
         <div class="toolbar-group">
-            <button id="again" type="button" aria-label="Again" title="Optimize everything again with the current settings">
-                <span class="icon i-again" aria-hidden="true"></span><span class="label">Again</span>
+            <button id="again" type="button" class="command" aria-label="Optimize again" title="Optimize everything again with the current settings (Ctrl+R)">
+                <span class="icon i-again" aria-hidden="true"></span>
             </button>
-            <button id="stop" type="button" aria-label="Stop" title="Stop" disabled>
-                <span class="icon i-stop" aria-hidden="true"></span><span class="label">Stop</span>
+            <button id="stop" type="button" class="command" aria-label="Stop" title="Stop (Ctrl+.)" disabled>
+                <span class="icon i-stop" aria-hidden="true"></span>
             </button>
-            <button id="clear" type="button" aria-label="Clear" title="Clear the list">
-                <span class="icon i-clear" aria-hidden="true"></span><span class="label">Clear</span>
+            <button id="clear" type="button" class="command" aria-label="Clear the list" title="Clear the list (Ctrl+K)">
+                <span class="icon i-clear" aria-hidden="true"></span>
             </button>
         </div>
-        <div class="toolbar-spacer"></div>
-        <button id="toggle-settings" type="button" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="settings-panel">
-            <span class="icon i-settings" aria-hidden="true"></span><span class="label">Settings</span>
+        <div class="toolbar-divider" aria-hidden="true"></div>
+        <button id="toggle-settings" type="button" class="command" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="settings-panel">
+            <span class="icon i-settings" aria-hidden="true"></span>
         </button>
     </header>
 
     <main>
         <div class="list-pane" data-view="queue">
-            <!-- Files waiting or being optimized, and files that are finished
-                 (optimized, already optimal, failed, reverted or stopped). -->
-            <div class="tabs list-tabs" role="tablist" aria-label="Files">
-                <button type="button" role="tab" id="view-queue" data-view="queue" aria-controls="file-table" aria-selected="true">
-                    <span class="icon i-queue" aria-hidden="true"></span>Queue<span class="count" id="count-queue">0</span>
-                </button>
-                <button type="button" role="tab" id="view-done" data-view="done" aria-controls="file-table" aria-selected="false" tabindex="-1">
-                    <span class="icon i-done" aria-hidden="true"></span>Done<span class="count" id="count-done">0</span>
-                </button>
-            </div>
-
             <div class="list-body">
                 <table id="file-table">
                     <thead>
@@ -143,6 +144,16 @@
                         <label class="row"><span class="row-text">Strip metadata from PNG</span><input type="checkbox" class="switch" data-setting="PngOutRemoveChunks"></label>
                         <label class="row"><span class="row-text">Strip metadata from JPEG</span><input type="checkbox" class="switch" data-setting="JpegTranStripAll"></label>
                         <label class="row"><span class="row-text">Preserve file dates</span><input type="checkbox" class="switch" data-setting="PreserveDates"></label>
+                        <label class="row"><span class="row-text">Keep originals <small>copied into an “ImageOptim originals” folder beside each file before it is first changed</small></span><input type="checkbox" class="switch" data-setting="KeepOriginals"></label>
+                    </div>
+
+                    <h2>Optimized files</h2>
+                    <div class="card">
+                        <label class="row"><span class="row-text">Skip files already optimized <small>recognised by their content, across launches; Optimize Again still runs</small></span><input type="checkbox" class="switch" data-setting="SkipOptimized"></label>
+                        <div class="row">
+                            <span class="row-text" id="history-count">No files remembered</span>
+                            <button type="button" id="forget-history">Forget</button>
+                        </div>
                     </div>
 
                     <h2>Performance</h2>
@@ -211,6 +222,12 @@
     </div>
 
     <footer class="status-bar">
+        <!-- Everything queued since the queue was last empty: time-weighted
+             once lib/eta.js has seen a file of each kind finish. -->
+        <div id="batch-progress" class="batch-progress" role="progressbar" aria-label="Optimizing"
+             aria-valuemin="0" aria-valuemax="100" hidden>
+            <div class="batch-progress-fill"></div>
+        </div>
         <span id="status-files">No files</span>
         <span class="toolbar-spacer"></span>
         <span id="status-savings"></span>

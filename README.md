@@ -13,9 +13,18 @@ same per-format plans and the same command-line arguments.
 ## ImageOptim for Windows
 
 Drop files or folders in; each image is optimized in place and the smallest
-result of every applicable optimizer is kept. Files waiting or being optimized
-are under **Queue**; each one moves to **Done** as it finishes, and the window
-switches to Done when the queue runs out.
+result of every applicable optimizer is kept. One bar runs along the top: the
+**Queue** and **Done** tabs on the left, the commands as icons on the right.
+Files waiting or being optimized are under Queue; each one moves to Done as it
+finishes, and the window switches to Done when the queue runs out.
+
+While files are queued, a bar at the bottom of the window and the taskbar
+button fill up, and the status bar shows how many are done and about how long
+is left. The time is learned from the files as they finish. Files an earlier
+run already optimized, in this session or a past one, are recognised by their
+content and go straight to Done.
+
+![Two large PNGs still running, each row's line over its track, and the bar and time left along the bottom](docs/screenshots/progress-light.png)
 
 ![The Done list after a run, showing per-file savings and which optimizer won](docs/screenshots/results-light.png)
 
@@ -24,9 +33,15 @@ Appearance.
 
 ![The same list in dark mode](docs/screenshots/results-dark.png)
 
-Settings has three tabs. **Optimizers** switches each optimizer on and off
-and shows which are installed; **Options** has lossy quality per format,
-metadata stripping and how hard to work.
+Settings has three tabs:
+- **Optimizers** switches each optimizer on and off and shows which are
+  installed.
+- **Options** has:
+  - lossy quality per format;
+  - metadata stripping;
+  - how hard to work;
+  - **Keep originals**;
+  - whether to skip files already optimized.
 
 ![The settings panel on its Optimizers tab](docs/screenshots/settings-dark.png)
 
@@ -35,8 +50,8 @@ slider that every shade in the window follows, here set to purple.
 
 ![The settings panel on its Appearance tab, with a purple accent](docs/screenshots/settings-appearance-light.png)
 
-The window adapts as it narrows: the toolbar keeps its icons, the list drops
-the less important columns, and settings slide over the list.
+The window adapts as it narrows: the tabs keep their icons and counts, the list
+drops the less important columns, and settings slide over the list.
 
 ### Download
 
@@ -57,9 +72,14 @@ The app is not code-signed, so Windows shows a blue "Windows protected your PC"
 box on first launch — **More info** → **Run anyway**. Unblocking the zip before
 extracting avoids it.
 
-**Files are replaced in place.** Saving is atomic — the result is staged beside
-the original and renamed onto it — and each original is backed up for the session
-so Ctrl+Z can restore it, but keep copies of anything irreplaceable.
+**Files are replaced in place.** Saving is atomic: the result is staged beside
+the original and renamed onto it. Each original is backed up for the session,
+so Ctrl+Z can restore it.
+
+To keep the originals for good, turn on **Keep originals** in Settings →
+Options. Before a file is first changed, its untouched copy goes into an
+`ImageOptim originals` folder beside it. That folder is never optimized, and
+nothing in it is ever deleted.
 
 ### Building it yourself
 
@@ -69,7 +89,7 @@ with MinGW-w64 under MSYS2, and `win/` packages the app around them. See
 plans and the Zopfli size threshold were derived.
 
 The screenshots above were taken on Windows 11 from a real run, and were
-themselves optimized by this build: 37.3% smaller, Zopfli winning all four.
+themselves optimized by this build: 36.2% smaller, Zopfli winning all five.
 
 ---
 
