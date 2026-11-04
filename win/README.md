@@ -174,15 +174,35 @@ script on macOS would have found:
   to `_stat`, which on MinGW-w64 expands to `_stat64i32` and takes a different
   struct than `misc.c` passes.
 - AdvanceCOMP 1.15 declares `throw()` specifications that C++17 removed.
-- Guetzli's generated makefile links libpng dynamically through `pkg-config`.
-  The executable then runs on the build machine, where MSYS2's `mingw64\bin` is
-  on PATH, and fails with `0xC0000135` (STATUS_DLL_NOT_FOUND) anywhere else. It
-  is now linked with `-static`. The other ten tools were already self-contained,
-  which is why only this one broke.
 - `svgo.js` is not an executable, so it sat outside the `bin/` artifact path and
   never reached the packaging job. The app shipped with no SVGO and reported
   nothing, because a missing optimizer is skipped by design. The packaging job
   now fails if it is absent.
+
+Running it all on a Windows 11 machine, rather than only in CI, found four more:
+
+- **The tests never ran on Windows.** npm runs scripts through `cmd.exe`, where
+  single quotes are literal, so `node --test 'test/*.test.js'` matched nothing
+  and passed with zero tests - including the CI step that was meant to check the
+  real executables. The glob is now unquoted: `cmd.exe` hands it to Node, which
+  expands it, and a POSIX shell expands it itself. Both CI test steps also fail
+  if no tests ran, and the Windows one if any were skipped.
+- **Release 1.4.0 shipped five optimizers that only ran by accident.** AdvPNG,
+  Gifsicle, Guetzli, Pngcrush and Zopfli were linked against MinGW runtime DLLs
+  (libstdc++, libgcc_s, winpthread, zlib1, libpng16) that are not shipped. They
+  loaded wherever Git for Windows' `mingw64\bin` happened to be on PATH - the
+  build machine, the CI runner - and failed with `0xC0000135` everywhere else,
+  which the app reads as "no improvement". GIFs, whose only optimizer is
+  Gifsicle, were never optimized. They are now linked with `-static`, and
+  `Test-SelfContained` refuses to publish any executable that imports a DLL
+  from MinGW's own `bin`.
+- `build-windows.ps1` broke under Windows PowerShell 5.1, the one Windows ships.
+  With output redirected, 5.1 turns a native command's stderr into terminating
+  errors, so a pacman warning aborted the build; and it passes arguments with
+  embedded double quotes unescaped, so a bash script containing `"` arrived in
+  pieces. Bash now writes stderr to stdout, and scripts go to it as a file.
+- The `queue` cycle test made a symlink, which Windows only allows with
+  administrator rights or Developer Mode; it now makes a junction.
 
 ## Runtime
 
@@ -192,7 +212,17 @@ previous pin, 33.2.0, was two years old and carried unpatched Chromium issues.
 
 Verified by running the real preload, renderer and `lib/` under Electron 45 on
 macOS: the contextBridge surface, `nativeImage` decoding for the Guetzli path, a
-full optimize run, and the rendered rows and status bar.
+full optimize run, and the rendered rows and status bar. Since then also on
+Windows 11, with optimizers built locally by `build-windows.ps1` and no MinGW
+directory on PATH: the full test suite including the binary checks, and an
+optimize run over PNG, JPEG, GIF and SVG samples with every result decoded
+afterwards.
+
+The page declares `color-scheme: light dark`, without which Chromium draws its
+native controls - scrollbars, sliders, checkboxes, the select - in the light
+scheme even in a dark window. Scrollbars use the standard `scrollbar-width` and
+`scrollbar-color` rather than a Chromium feature switch: neither
+`FluentOverlayScrollbar` nor `OverlayScrollbar` changes anything in Chromium 156.
 
 ## Saving safely
 

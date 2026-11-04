@@ -53,7 +53,10 @@ test('expandPaths — a directory cycle terminates', async () => {
     const root = tree('cycle', (r) => {
         fs.mkdirSync(path.join(r, 'inner'));
         fs.writeFileSync(path.join(r, 'only.png'), 'x');
-        fs.symlinkSync(r, path.join(r, 'inner', 'loop'));
+        // A junction on Windows: a true symlink needs administrator rights or
+        // Developer Mode there, and junctions are also how a cycle most often
+        // turns up on a Windows disk. The type is ignored on other platforms.
+        fs.symlinkSync(r, path.join(r, 'inner', 'loop'), 'junction');
     });
     let guard;
     const found = await Promise.race([

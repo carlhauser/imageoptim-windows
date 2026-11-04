@@ -1,4 +1,11 @@
 :root {
+    /* Without this Chromium draws every native control - scrollbars, sliders,
+       checkboxes, the select and its popup - in its light scheme, so they
+       glared out of the dark window. With it they follow the system setting
+       along with the page. */
+    color-scheme: light dark;
+    accent-color: var(--accent);
+
     --bg: #1e1e1e;
     --bg-raised: #272727;
     --bg-hover: #323232;
@@ -9,6 +16,8 @@
     --accent-dim: #2a6f38;
     --danger: #d05050;
     --radius: 4px;
+    --scrollbar-thumb: #4e4e4e;
+    --scrollbar-thumb-hover: #6e6e6e;
 }
 
 @media (prefers-color-scheme: light) {
@@ -21,10 +30,28 @@
         --text-dim: #6a6a6a;
         --accent: #2a8f3c;
         --accent-dim: #1f7030;
+        --scrollbar-thumb: #c4c4c4;
+        --scrollbar-thumb-hover: #a0a0a0;
     }
 }
 
 * { box-sizing: border-box; }
+
+/* Chromium's default on Windows is the full-width Fluent bar, with arrow
+   buttons and a thumb nearly as bright as the text, standing beside the list
+   like an extra column. Windows 11's own lists show a slim, quiet thumb on an
+   invisible track; these are the standard properties, so no Chromium feature
+   switch is involved. The thumb firms up while the pointer is over the pane. */
+#file-table,
+#settings-panel {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+#file-table:hover,
+#settings-panel:hover {
+    scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+}
 
 html, body {
     margin: 0;

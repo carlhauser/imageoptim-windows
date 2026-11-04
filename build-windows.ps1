@@ -137,16 +137,40 @@ function Invoke-Mingw {
         $converted = $script:ExtraPathDirs | ForEach-Object { ConvertTo-MsysPath $_ }
         $prefix = "export PATH='$($converted -join ':')':`$PATH; "
     }
-    $full = "${prefix}set -euo pipefail; cd '$msysCwd'; $Script"
+    # stderr is folded into stdout inside bash. Windows PowerShell 5.1 - the shell
+    # Windows ships - turns each stderr line of a native command into an error
+    # record whenever the caller redirects output (`*> build.log`, Tee-Object),
+    # and with $ErrorActionPreference = 'Stop' the first one is terminating. A
+    # pacman "is up to date -- skipping" warning was enough to abort the whole
+    # build. PowerShell 7, which CI uses, does not do this, so CI never saw it.
+    $full = "exec 2>&1; ${prefix}set -euo pipefail; cd '$msysCwd'; $Script"
 
     $env:MSYSTEM         = 'MINGW64'
     $env:CHERE_INVOKING  = '1'
     $env:MSYS2_PATH_TYPE = 'minimal'
 
-    # Send the build log straight to the console; otherwise it joins this
-    # function's output stream and the caller gets an array instead of a code.
-    & $Bash -lc $full | Out-Host
-    return $LASTEXITCODE
+    # Failure is reported through the exit code, never by throwing; this is local
+    # to the function.
+    $ErrorActionPreference = 'Continue'
+
+    # The script goes to bash as a file, not as `bash -lc <script>`. Windows
+    # PowerShell 5.1 does not escape double quotes inside an argument it hands a
+    # native program, so any `"` in a script split it into several arguments and
+    # bash ran a truncated fragment. PowerShell 7 escapes them, which is why it
+    # only ever broke outside CI. Line endings are normalised in case this file
+    # is checked out with CRLF.
+    $scriptFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $body = ($full -replace "`r`n", "`n") + "`n"
+        [System.IO.File]::WriteAllText($scriptFile, $body, (New-Object System.Text.UTF8Encoding $false))
+
+        # Send the build log straight to the console; otherwise it joins this
+        # function's output stream and the caller gets an array instead of a code.
+        & $Bash -l (ConvertTo-MsysPath $scriptFile) | Out-Host
+        return $LASTEXITCODE
+    } finally {
+        Remove-Item -LiteralPath $scriptFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function ConvertTo-MsysPath {
@@ -174,6 +198,29 @@ function Invoke-Step {
     return $code
 }
 
+# Nothing is shipped beside the executables, so each must load with only Windows'
+# own DLLs. One that imports a MinGW runtime - libstdc++, libgcc_s, winpthread,
+# zlib1, libpng16 - starts on the build machine and on any PC that happens to
+# have Git for Windows' mingw64\bin on PATH, and fails with 0xC0000135 (DLL not
+# found) everywhere else, which the app cannot tell from "already optimal".
+# Release 1.4.0 shipped five optimizers like that. Anything the executable
+# imports that exists in MinGW's own bin directory is not a system DLL.
+function Test-SelfContained {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $exe = ConvertTo-MsysPath $Path
+    $code = Invoke-Mingw -Script @"
+bad=`$(objdump -p '$exe' | awk '/DLL Name:/ {print `$3}' | while read -r dll; do
+    if [ -f "/mingw64/bin/`$dll" ]; then printf '%s ' "`$dll"; fi
+done)
+if [ -n "`$bad" ]; then
+    echo "    not self-contained; needs MinGW DLLs that are not shipped: `$bad"
+    exit 1
+fi
+"@
+    return ($code -eq 0)
+}
+
 # Copies a built artifact into $OutDir, adding the .exe suffix when the build
 # produced an extension-less binary (GNU make does that for hand-written rules).
 function Publish-Artifact {
@@ -188,6 +235,14 @@ function Publish-Artifact {
         if (Test-Path $src -PathType Leaf) {
             $dst = Join-Path $OutDir $TargetName
             Copy-Item -LiteralPath $src -Destination $dst -Force
+            if (-not (Test-SelfContained -Path $dst)) {
+                # Deleted rather than left in place: the app lists a missing
+                # optimizer as missing, but runs a present one, and a run that
+                # cannot load its DLLs reads as "no improvement".
+                Remove-Item -LiteralPath $dst -Force
+                $Results[$Tool] = 'FAILED'
+                return $false
+            }
             $size = [math]::Round((Get-Item $dst).Length / 1KB)
             Write-Host "    $TargetName  ($size KB)" -ForegroundColor Green
             $Results[$Tool] = 'built'
@@ -248,7 +303,12 @@ function Resolve-Cargo {
     if ($cargo -and $rustup) {
         $dir = Split-Path $cargo.Source -Parent
         Write-Host "    using rustup's cargo at $dir" -ForegroundColor DarkGray
-        & rustup target add x86_64-pc-windows-gnu 2>&1 | Out-Host
+        # rustup reports progress on stderr, and under Windows PowerShell 5.1 a
+        # `2>&1` with $ErrorActionPreference = 'Stop' throws on the first line.
+        & {
+            $ErrorActionPreference = 'Continue'
+            & rustup target add x86_64-pc-windows-gnu 2>&1 | ForEach-Object { "$_" } | Out-Host
+        }
         $script:ExtraPathDirs.Insert(0, $dir)
         return
     }
@@ -373,7 +433,10 @@ if [ ! -f config.status ]; then
 fi
 # automake names the target with the executable suffix, so on Windows the rule
 # is advpng.exe and plain `advpng` has no rule at all.
-make -j$Jobs advpng.exe
+# -static: otherwise it needs libstdc++-6, libgcc_s_seh-1 and zlib1 at run time
+# (see Test-SelfContained). The old binary goes first so make relinks it.
+rm -f advpng.exe
+make -j$Jobs advpng.exe LDFLAGS=-static
 "@ -WorkingDirectory (Join-Path $RepoRoot 'advpng')
     if ($code -ne 0) { $Results['advpng'] = 'FAILED'; return }
 
@@ -398,7 +461,9 @@ fi
 if [ ! -f config.status ]; then
     ./configure --disable-gifview --disable-gifdiff CFLAGS='-O2'
 fi
-make -j$Jobs
+# -static: otherwise it needs libwinpthread-1 at run time.
+rm -f src/gifsicle.exe
+make -j$Jobs LDFLAGS=-static
 "@ -WorkingDirectory (Join-Path $RepoRoot 'gifsicle')
     if ($code -ne 0) { $Results['gifsicle'] = 'FAILED'; return }
 
@@ -409,7 +474,9 @@ make -j$Jobs
 
 function Build-ZopfliPng {
     $code = Invoke-Step -Name 'ZopfliPNG' -Script @"
-make -j$Jobs zopflipng
+# -static: otherwise it needs libstdc++-6 and libgcc_s_seh-1 at run time.
+rm -f zopflipng zopflipng.exe
+make -j$Jobs zopflipng LDFLAGS=-static
 "@ -WorkingDirectory (Join-Path $RepoRoot 'zopfli-png\zopfli')
     if ($code -ne 0) { $Results['zopflipng'] = 'FAILED'; return }
 
@@ -441,7 +508,7 @@ function Build-PngCrush {
     $libMsys = ConvertTo-MsysPath $lib.FullName
 
     $code = Invoke-Step -Name 'pngcrush' -Script @"
-gcc -O3 -fomit-frame-pointer -I'$incBuild' -I'$incSrc' \
+gcc -O3 -fomit-frame-pointer -static -I'$incBuild' -I'$incSrc' \
     -o pngcrush.exe pngcrush.c '$libMsys' -lz -lm
 "@ -WorkingDirectory (Join-Path $RepoRoot 'pngcrush')
     if ($code -ne 0) { $Results['pngcrush'] = 'FAILED'; return }
@@ -456,16 +523,21 @@ function Build-Guetzli {
     # which is dynamic. The resulting exe runs on the build machine, where
     # MSYS2's mingw64\bin is on PATH, and dies with 0xC0000135
     # (STATUS_DLL_NOT_FOUND) anywhere else - including inside the package.
-    # -static pulls libpng, libstdc++, libgcc and winpthread in, matching the
-    # other ten tools, which are already self-contained.
+    # -static pulls libpng, libstdc++, libgcc and winpthread in. AdvPNG,
+    # Gifsicle, Pngcrush and ZopfliPNG had the same fault and are linked the
+    # same way; Test-SelfContained now refuses any exe that still has it.
     #
     # zlib has to be named separately. The makefile asks pkg-config for libpng
     # without --static, so it gets -lpng16 alone, and a statically linked
     # libpng16.a then has nothing to resolve its own deflate and inflate calls
     # against. It goes in LIBS rather than LDFLAGS because the generated link
     # line puts LDFLAGS before -lpng16, and ld resolves left to right.
+    #
+    # The old binary goes first: changing only link flags leaves make thinking
+    # the target is up to date, and it would publish the dynamic one again.
     $code = Invoke-Step -Name 'Guetzli' -Script @"
-make -j$Jobs LDFLAGS="-static" LIBS="-lz"
+rm -f bin/Release/guetzli bin/Release/guetzli.exe
+make -j$Jobs LDFLAGS=-static LIBS=-lz
 "@ -WorkingDirectory (Join-Path $RepoRoot 'guetzli\guetzli')
     if ($code -ne 0) { $Results['guetzli'] = 'FAILED'; return }
 
