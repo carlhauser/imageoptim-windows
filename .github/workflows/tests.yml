@@ -40,6 +40,6 @@ jobs:
         run: |
           set -o pipefail
           npm test 2>&1 | tee result.txt
-          grep -qE '^. tests [1-9]' result.txt \
+          tr -d '\r' < result.txt | grep -qE 'tests [1-9]' \
             || { echo '::error::no tests ran'; exit 1; }
           rm -f result.txt

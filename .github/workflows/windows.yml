@@ -126,12 +126,18 @@ jobs:
           IMAGEOPTIM_BIN="$GITHUB_WORKSPACE/win/resources/bin" npm test 2>&1 | tee result.txt
           # node --test exits 0 when it matches no files at all, so a glob that
           # silently expanded to nothing used to pass this step with "tests 0".
-          grep -qE '^. tests [1-9]' result.txt \
+          # Matched loosely: the counts are prefixed with "#" by the TAP reporter
+          # and with a multi-byte character by the spec reporter, and the line
+          # endings differ between runners.
+          counts=$(tr -d '\r' < result.txt)
+          echo "$counts" | grep -qE 'tests [1-9]' \
             || { echo '::error::no tests ran'; exit 1; }
-          # And the binary checks must not quietly skip for want of IMAGEOPTIM_BIN,
-          # which would leave the arguments unverified against the real builds.
-          grep -qE '^. skipped 0' result.txt \
-            || { echo '::error::tests were skipped; the optimizers were not found'; exit 1; }
+          # A skip here means IMAGEOPTIM_BIN did not resolve, leaving the
+          # arguments unverified against the real executables.
+          if echo "$counts" | grep -qE 'skipped [1-9]'; then
+            echo '::error::tests were skipped; the optimizers were not found'
+            exit 1
+          fi
           rm -f result.txt
 
       - name: Build the installer
