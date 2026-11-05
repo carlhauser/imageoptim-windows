@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const {
     app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, clipboard,
-    Notification, powerSaveBlocker, screen,
+    Notification, powerSaveBlocker, screen, systemPreferences,
 } = require('electron');
 
 const { Settings } = require('./lib/settings');
@@ -625,6 +625,28 @@ function showJobMenu(ids) {
     ]).popup({ window: mainWindow });
 }
 
+const CONFIRM = {
+    'reset-settings': {
+        message: 'Restore every setting to its default?',
+        detail: 'All three tabs: formats, options and appearance.',
+        button: 'Restore Defaults',
+    },
+    'forget-history': {
+        message: 'Forget every optimized file?',
+        detail: 'Files optimized before will be optimized again the next time they are added.',
+        button: 'Forget',
+    },
+};
+
+function windowsAccent() {
+    try {
+        const color = systemPreferences.getAccentColor();
+        return /^[0-9a-f]{6}/i.test(color) ? color.slice(0, 6) : null;
+    } catch (err) {
+        return null;
+    }
+}
+
 function registerIpc() {
     ipcMain.handle('files:add', (event, paths) => queue.add(paths || []));
     ipcMain.handle('files:choose', () => openFileDialog());
@@ -641,6 +663,26 @@ function registerIpc() {
     // is ever opened, shown, restored or removed
     ipcMain.handle('jobs:command', (event, command, ids) => runJobCommand(String(command), ids));
     ipcMain.handle('jobs:menu', (event, ids) => { showJobMenu(ids); });
+
+    // Windows' accent colour, as RRGGBB, for Appearance's "Use the Windows
+    // accent colour"; the window hears when it changes
+    ipcMain.handle('accent:get', () => windowsAccent());
+
+    // Questions the window asks before something it cannot undo. It names
+    // which; the words are the main process's own.
+    ipcMain.handle('confirm', async (event, kind) => {
+        const question = CONFIRM[kind];
+        if (!question) return false;
+        const { response } = await messageBox({
+            type: 'question',
+            message: question.message,
+            detail: question.detail,
+            buttons: [question.button, 'Cancel'],
+            defaultId: 0,
+            cancelId: 1,
+        });
+        return response === 0;
+    });
 
     ipcMain.handle('settings:get', () => settings.all());
     ipcMain.handle('settings:set', (event, patch) => {
@@ -775,6 +817,7 @@ app.whenReady().then(() => {
     applyTheme();
     registerIpc();
     buildMenu();
+    systemPreferences.on('accent-color-changed', () => send('accent:changed', windowsAccent()));
     // The window first: its renderer starts while the list of optimized files
     // is read below, which can be tens of thousands of lines. Nothing it asks
     // is answered before this function has returned, by which time the queue

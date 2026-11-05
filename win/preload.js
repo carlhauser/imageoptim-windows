@@ -34,6 +34,10 @@ contextBridge.exposeInMainWorld('imageoptim', {
     setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
     resetSettings: () => ipcRenderer.invoke('settings:reset'),
     onSettingsChanged: (handler) => ipcRenderer.on('settings:changed', (event, values) => handler(values)),
+    getWindowsAccent: () => ipcRenderer.invoke('accent:get'),
+    onWindowsAccent: (handler) => ipcRenderer.on('accent:changed', (event, color) => handler(color)),
+    // 'reset-settings' | 'forget-history': asks, and answers true to go ahead
+    confirm: (kind) => ipcRenderer.invoke('confirm', kind),
     listTools: () => ipcRenderer.invoke('tools:list'),
     historyStats: () => ipcRenderer.invoke('history:stats'),
     forgetHistory: () => ipcRenderer.invoke('history:forget'),

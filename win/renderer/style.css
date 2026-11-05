@@ -19,12 +19,18 @@
     --stroke-strong: rgba(255, 255, 255, 0.16);
     --text: #f2f2f2;
     --text-dim: #a8a8a8;
-    --text-faint: #7c7c7c;
+    /* 4.5:1 or better on every background here, for the small text that
+       uses it ("already optimal", "waiting") */
+    --text-faint: #9a9a9a;
     --danger: #ff8f8f;
     --success: #6ccb5f;
     --track: rgba(255, 255, 255, 0.2);
     --thumb-ring: #454545;
     --row-hover: rgba(255, 255, 255, 0.05);
+    /* WinUI's subtle fills, for flat buttons on the toolbar and headings */
+    --subtle-hover: rgba(255, 255, 255, 0.0605);
+    --subtle-pressed: rgba(255, 255, 255, 0.0419);
+    --badge: rgba(255, 255, 255, 0.09);
     --shadow-raised: 0 0 0 1px var(--stroke), 0 1px 3px rgba(0, 0, 0, 0.3);
     --radius: 6px;
 
@@ -63,12 +69,17 @@
         --stroke-strong: rgba(0, 0, 0, 0.16);
         --text: #1b1b1b;
         --text-dim: #5d5d5d;
-        --text-faint: #8a8a8a;
+        --text-faint: #6e6e6e;
         --danger: #c42b1c;
         --success: #0f7b0f;
         --track: rgba(0, 0, 0, 0.2);
         --thumb-ring: #ffffff;
         --row-hover: rgba(0, 0, 0, 0.04);
+        /* The old hover fill was the toolbar's own colour, so hovering a
+           button there showed nothing */
+        --subtle-hover: rgba(0, 0, 0, 0.0373);
+        --subtle-pressed: rgba(0, 0, 0, 0.0241);
+        --badge: rgba(0, 0, 0, 0.06);
         --shadow-raised: 0 0 0 1px var(--stroke), 0 1px 2px rgba(0, 0, 0, 0.06);
 
         --accent-l: 0.515;
@@ -230,8 +241,8 @@ button.command:not(.primary) {
     box-shadow: none;
 }
 
-button.command:not(.primary):hover:not(:disabled) { background: var(--control-hover); }
-button.command:not(.primary):active:not(:disabled) { background: var(--control-active); }
+button.command:not(.primary):hover:not(:disabled) { background: var(--subtle-hover); }
+button.command:not(.primary):active:not(:disabled) { background: var(--subtle-pressed); }
 
 button.command:not(.primary) .icon {
     color: var(--text-dim);
@@ -241,7 +252,7 @@ button.command:not(.primary) .icon {
 button.command:not(.primary):hover:not(:disabled) .icon { color: var(--text); }
 
 #toggle-settings[aria-expanded="true"] {
-    background: var(--control-hover);
+    background: var(--subtle-hover);
     box-shadow: inset 0 0 0 1px var(--stroke);
 }
 
@@ -324,7 +335,7 @@ main {
     text-align: center;
     font-variant-numeric: tabular-nums;
     color: var(--text-dim);
-    background: var(--control-hover);
+    background: var(--badge);
 }
 
 /* A red dot on Done while any file there failed */
@@ -421,7 +432,7 @@ th button.sort {
     box-shadow: none;
 }
 
-th button.sort:hover { color: var(--text); background: var(--control-hover); }
+th button.sort:hover { color: var(--text); background: var(--subtle-hover); }
 th button.sort:active { scale: 1; }
 th[aria-sort="ascending"] button.sort::after { content: "▲"; font-size: 8px; color: var(--accent); }
 th[aria-sort="descending"] button.sort::after { content: "▼"; font-size: 8px; color: var(--accent); }
@@ -520,6 +531,8 @@ tbody tr:is(:hover, .selected):is([data-state="queued"], [data-state="running"])
 .error { color: var(--danger); }
 
 tbody tr.selected .savings:not(.none):not(.error) { color: var(--selection-accent); }
+/* On the selection's tint the dimmed colours fall under 4.5:1 */
+tbody tr.selected :is(.size, .tool, .savings.none, .savings.activity) { color: var(--text); }
 
 /* A thin progress line along the bottom of the row while it runs, over a
    faint track that shows where it ends. It moves once a second (main.js), so
@@ -617,6 +630,17 @@ body:has(> #drop-overlay:not([hidden])) #empty-state { visibility: hidden; }
 
 .empty-hint { margin: 0; max-width: 360px; text-wrap: pretty; }
 
+/* Add files and Add folder, when the list is empty: the overlay itself lets
+   drops through, its buttons take clicks */
+.empty-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+    pointer-events: auto;
+}
+
+.empty-actions[hidden] { display: none; }
+
 /* ----------------------------------------------------------------- settings */
 
 #settings-panel {
@@ -657,8 +681,7 @@ body:has(> #drop-overlay:not([hidden])) #empty-state { visibility: hidden; }
 }
 
 .tabs [role="tab"] {
-    /* Sized by their labels, so "Appearance" gets the room "Options" leaves */
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
     height: 30px;
     padding: 0 6px;
@@ -669,7 +692,7 @@ body:has(> #drop-overlay:not([hidden])) #empty-state { visibility: hidden; }
     box-shadow: none;
 }
 
-.tabs [role="tab"]:hover:not([aria-selected="true"]) { color: var(--text); background: transparent; }
+.tabs [role="tab"]:hover:not([aria-selected="true"]) { color: var(--text); background: var(--subtle-hover); }
 
 .tabs [role="tab"][aria-selected="true"] {
     color: var(--text);
@@ -683,7 +706,9 @@ body:has(> #drop-overlay:not([hidden])) #empty-state { visibility: hidden; }
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 12px 16px;
+    /* The cards keep their width whether or not the scrollbar shows */
+    scrollbar-gutter: stable;
+    padding: 0 6px 16px 12px;
 }
 
 .pane[hidden] { display: none; }
@@ -778,7 +803,25 @@ select {
     padding: 10px 0 12px;
 }
 
-.slider > span { grid-column: 1 / -1; }
+.slider > label { grid-column: 1 / -1; display: flex; flex-direction: column; }
+.slider > label small { font-size: 11.5px; color: var(--text-dim); }
+
+/* A row that does nothing without another setting (data-requires in
+   index.html): dimmed and disabled, its small print saying why. The small
+   print only shows while it applies. */
+.off .row-text,
+.slider.off > label { color: var(--text-dim); }
+.needs { display: none; }
+.off .needs { display: block; }
+input.switch:disabled,
+input[type="range"]:disabled { opacity: 0.45; }
+
+.pane-note {
+    margin: 12px 4px 0;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    text-wrap: pretty;
+}
 
 .slider output {
     min-width: 38px;
@@ -1070,6 +1113,108 @@ input[type="range"].saturation::-webkit-slider-runnable-track {
 @media (prefers-reduced-motion: reduce) {
     .batch-progress-fill,
     tbody tr.running { transition: none; }
+    /* A ring that does not turn, and buttons that do not shrink when pressed */
+    tr[data-state="running"] .state { animation: none; border-top-color: var(--stroke-strong); border-right-color: var(--accent); }
+    button:active:not(:disabled) { scale: none; }
+    input.switch::before,
+    input.switch { transition: none; }
+}
+
+/* Hidden, but read by screen readers (the announcer in index.html) */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/* -------------------------------------------------------- contrast themes */
+
+/* Windows' contrast themes replace every colour with a handful of system
+   ones, and drop backgrounds and shadows: the masked icons, the selected tab
+   and row, the switches and both progress lines all vanished. Each is given
+   a system colour of its own here. */
+@media (forced-colors: active) {
+    .icon,
+    .state {
+        forced-color-adjust: none;
+        background-color: CanvasText;
+    }
+
+    button,
+    select,
+    .card,
+    .tabs,
+    .segmented,
+    .chip,
+    .badge,
+    .count,
+    .filter-bar input[type="search"] {
+        border: 1px solid ButtonText;
+    }
+
+    /* Forced colours paint even a transparent border, so none at all */
+    th button.sort,
+    .row-stop { border: 0; }
+
+    .tabs [role="tab"][aria-selected="true"] .count,
+    tbody tr.selected .badge { color: HighlightText; border-color: HighlightText; background: none; }
+
+    :focus-visible { outline-color: Highlight; }
+    #file-table:focus-visible tr.active { outline-color: Highlight; }
+
+    .tabs [role="tab"][aria-selected="true"],
+    .segmented label:has(input:checked),
+    tbody tr.selected,
+    #toggle-settings[aria-expanded="true"] {
+        forced-color-adjust: none;
+        background: Highlight;
+        color: HighlightText;
+    }
+
+    :is(.tabs [role="tab"][aria-selected="true"], .segmented label:has(input:checked), tbody tr.selected, #toggle-settings[aria-expanded="true"]) :is(.icon, .state) {
+        background-color: HighlightText;
+    }
+
+    tbody tr.selected td { color: HighlightText; }
+
+    tr[data-state="running"] .state {
+        background: none;
+        border-color: GrayText;
+        border-top-color: Highlight;
+    }
+
+    input.switch { forced-color-adjust: none; border-color: ButtonText; background: Canvas; }
+    input.switch::before { background: ButtonText; }
+    input.switch:checked { background: Highlight; border-color: Highlight; }
+    input.switch:checked::before { background: HighlightText; }
+
+    input[type="range"]::-webkit-slider-runnable-track {
+        forced-color-adjust: none;
+        background: linear-gradient(to right, Highlight var(--fill, 50%), GrayText var(--fill, 50%));
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+        forced-color-adjust: none;
+        background: Highlight;
+        border-color: ButtonText;
+    }
+
+    tbody tr.running {
+        forced-color-adjust: none;
+        background-image: linear-gradient(Highlight, Highlight), linear-gradient(GrayText, GrayText);
+    }
+
+    .batch-progress { forced-color-adjust: none; background: GrayText; }
+    .batch-progress-fill { background: Highlight; }
+
+    .list-tabs .count.has-errors::after,
+    .savings.problems::after { forced-color-adjust: none; background: Mark; color: MarkText; }
+
+    #drop-overlay { box-shadow: none; outline: 2px solid Highlight; outline-offset: -2px; }
+    .drop-card { border-color: Highlight; }
 }
 
 /* ------------------------------------------------------------ update banner */

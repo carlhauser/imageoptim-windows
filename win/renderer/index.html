@@ -93,6 +93,10 @@
                     <p class="empty-title">Drop images here</p>
                     <p class="empty-hint">PNG, JPEG, GIF, SVG, WebP and AVIF files, or whole folders.<br>
                        Files are optimized and overwritten in place.</p>
+                    <div class="empty-actions" id="empty-actions">
+                        <button type="button" id="empty-add-files" class="primary"><span class="icon i-add-files" aria-hidden="true"></span>Add files…</button>
+                        <button type="button" id="empty-add-folder"><span class="icon i-add-folder" aria-hidden="true"></span>Add a folder…</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -100,7 +104,7 @@
         <aside id="settings-panel" hidden>
             <div class="tabs" role="tablist" aria-label="Settings">
                 <button type="button" role="tab" id="tab-optimizers" aria-controls="pane-optimizers" aria-selected="true">
-                    <span class="icon i-tab-optimizers" aria-hidden="true"></span>Optimizers
+                    <span class="icon i-tab-optimizers" aria-hidden="true"></span>Formats
                 </button>
                 <button type="button" role="tab" id="tab-options" aria-controls="pane-options" aria-selected="false" tabindex="-1">
                     <span class="icon i-tab-options" aria-hidden="true"></span>Options
@@ -111,133 +115,143 @@
             </div>
 
             <div class="panes">
+                <!-- One card per format: its optimizers, what is stripped from
+                     it and, with lossy minification on, its quality. A row that
+                     depends on another setting is disabled and says why
+                     (data-requires, app.js). -->
                 <section class="pane" id="pane-optimizers" role="tabpanel" aria-labelledby="tab-optimizers">
-                    <h2>PNG</h2>
-                    <div class="card">
-                        <label class="row"><span class="row-text">OxiPNG</span><input type="checkbox" class="switch" data-setting="OptiPngEnabled"></label>
-                        <label class="row"><span class="row-text">Zopfli</span><input type="checkbox" class="switch" data-setting="ZopfliEnabled"></label>
-                        <label class="row"><span class="row-text">AdvPNG</span><input type="checkbox" class="switch" data-setting="AdvPngEnabled"></label>
-                        <label class="row"><span class="row-text">Pngcrush</span><input type="checkbox" class="switch" data-setting="PngCrush2Enabled"></label>
+                    <h2 id="h-png">PNG</h2>
+                    <div class="card" role="group" aria-labelledby="h-png">
+                        <label class="row"><span class="row-text">OxiPNG</span><input type="checkbox" class="switch" role="switch" data-setting="OptiPngEnabled"></label>
+                        <label class="row"><span class="row-text">Zopfli <small>slow; best on small graphics</small></span><input type="checkbox" class="switch" role="switch" data-setting="ZopfliEnabled"></label>
+                        <label class="row" data-requires="PngOutRemoveChunks"><span class="row-text">AdvPNG <small class="needs">Needs Strip metadata, below: it cannot keep it</small></span><input type="checkbox" class="switch" role="switch" data-setting="AdvPngEnabled"></label>
+                        <label class="row"><span class="row-text">Pngcrush</span><input type="checkbox" class="switch" role="switch" data-setting="PngCrush2Enabled"></label>
+                        <label class="row"><span class="row-text">Strip metadata <small>text, dates, colour profile and gamma</small></span><input type="checkbox" class="switch" role="switch" data-setting="PngOutRemoveChunks"></label>
+                        <div class="slider" data-requires="LossyEnabled">
+                            <label for="q-png">Quality <small class="needs">with lossy minification on (Options)</small></label>
+                            <input type="range" id="q-png" min="31" max="100" step="1" data-setting="PngMinQuality">
+                            <output data-output="PngMinQuality" for="q-png"></output>
+                        </div>
                     </div>
 
-                    <h2>JPEG</h2>
-                    <div class="card">
-                        <label class="row"><span class="row-text">MozJPEG <small>jpegtran</small></span><input type="checkbox" class="switch" data-setting="JpegTranEnabled"></label>
-                        <label class="row"><span class="row-text">JpegOptim</span><input type="checkbox" class="switch" data-setting="JpegOptimEnabled"></label>
-                        <label class="row"><span class="row-text">Guetzli <small>slow, uses GBs of RAM</small></span><input type="checkbox" class="switch" data-setting="GuetzliEnabled"></label>
+                    <h2 id="h-jpeg">JPEG</h2>
+                    <div class="card" role="group" aria-labelledby="h-jpeg">
+                        <label class="row"><span class="row-text">MozJPEG <small>jpegtran</small></span><input type="checkbox" class="switch" role="switch" data-setting="JpegTranEnabled"></label>
+                        <label class="row"><span class="row-text">JpegOptim</span><input type="checkbox" class="switch" role="switch" data-setting="JpegOptimEnabled"></label>
+                        <label class="row"><span class="row-text">Guetzli <small>lossy; slow, and uses gigabytes of memory</small></span><input type="checkbox" class="switch" role="switch" data-setting="GuetzliEnabled"></label>
+                        <label class="row"><span class="row-text">Strip metadata <small>EXIF, GPS, colour profile and rotation: photos can turn sideways or shift colour</small></span><input type="checkbox" class="switch" role="switch" data-setting="JpegTranStripAll"></label>
+                        <div class="slider" data-requires="LossyEnabled">
+                            <label for="q-jpeg">Quality <small class="needs">with lossy minification on (Options)</small></label>
+                            <input type="range" id="q-jpeg" min="30" max="100" step="1" data-setting="JpegOptimMaxQuality">
+                            <output data-output="JpegOptimMaxQuality" for="q-jpeg"></output>
+                        </div>
                     </div>
 
-                    <h2>GIF and SVG</h2>
-                    <div class="card">
-                        <label class="row"><span class="row-text">Gifsicle</span><input type="checkbox" class="switch" data-setting="GifsicleEnabled"></label>
-                        <label class="row"><span class="row-text">SVGO</span><input type="checkbox" class="switch" data-setting="SvgoEnabled"></label>
-                        <label class="row"><span class="row-text">Svgcleaner</span><input type="checkbox" class="switch" data-setting="SvgcleanerEnabled"></label>
+                    <h2 id="h-gif">GIF</h2>
+                    <div class="card" role="group" aria-labelledby="h-gif">
+                        <label class="row"><span class="row-text">Gifsicle</span><input type="checkbox" class="switch" role="switch" data-setting="GifsicleEnabled"></label>
+                        <div class="slider" data-requires="LossyEnabled">
+                            <label for="q-gif">Quality <small class="needs">with lossy minification on (Options)</small></label>
+                            <input type="range" id="q-gif" min="31" max="100" step="1" data-setting="GifQuality">
+                            <output data-output="GifQuality" for="q-gif"></output>
+                        </div>
                     </div>
 
-                    <h2>WebP and AVIF</h2>
-                    <div class="card">
-                        <label class="row"><span class="row-text">cwebp <small>lossless WebP always; lossy WebP with lossy minification</small></span><input type="checkbox" class="switch" data-setting="CwebpEnabled"></label>
-                        <label class="row"><span class="row-text">webpmux <small>strips EXIF and XMP from WebP</small></span><input type="checkbox" class="switch" data-setting="WebpmuxEnabled"></label>
-                        <label class="row"><span class="row-text">avifenc <small>re-encodes AVIF, with lossy minification only</small></span><input type="checkbox" class="switch" data-setting="AvifencEnabled"></label>
+                    <h2 id="h-svg">SVG</h2>
+                    <div class="card" role="group" aria-labelledby="h-svg">
+                        <label class="row"><span class="row-text">SVGO <small>with lossy minification on, also rounds numbers and drops titles</small></span><input type="checkbox" class="switch" role="switch" data-setting="SvgoEnabled"></label>
+                        <label class="row"><span class="row-text">Svgcleaner</span><input type="checkbox" class="switch" role="switch" data-setting="SvgcleanerEnabled"></label>
                     </div>
 
-                    <h2>Installed tools</h2>
-                    <div class="card">
+                    <h2 id="h-webp">WebP and AVIF</h2>
+                    <div class="card" role="group" aria-labelledby="h-webp">
+                        <label class="row"><span class="row-text">cwebp <small>lossless WebP always; lossy WebP with lossy minification</small></span><input type="checkbox" class="switch" role="switch" data-setting="CwebpEnabled"></label>
+                        <label class="row" data-requires="WebPAvifStripMetadata"><span class="row-text">webpmux <small class="needs">Needs Strip metadata, below</small></span><input type="checkbox" class="switch" role="switch" data-setting="WebpmuxEnabled"></label>
+                        <label class="row" data-requires="LossyEnabled"><span class="row-text">avifenc <small class="needs">re-encodes AVIF, with lossy minification on (Options)</small></span><input type="checkbox" class="switch" role="switch" data-setting="AvifencEnabled"></label>
+                        <label class="row"><span class="row-text">Strip metadata <small>EXIF and XMP; the colour profile always stays</small></span><input type="checkbox" class="switch" role="switch" data-setting="WebPAvifStripMetadata"></label>
+                        <div class="slider" data-requires="LossyEnabled">
+                            <label for="q-webp">WebP quality <small class="needs">with lossy minification on (Options)</small></label>
+                            <input type="range" id="q-webp" min="31" max="100" step="1" data-setting="WebPQuality">
+                            <output data-output="WebPQuality" for="q-webp"></output>
+                        </div>
+                        <div class="slider" data-requires="LossyEnabled">
+                            <label for="q-avif">AVIF quality <small class="needs">with lossy minification on (Options)</small></label>
+                            <input type="range" id="q-avif" min="31" max="100" step="1" data-setting="AvifQuality">
+                            <output data-output="AvifQuality" for="q-avif"></output>
+                        </div>
+                    </div>
+
+                    <h2 id="h-tools">Installed tools</h2>
+                    <div class="card" role="group" aria-labelledby="h-tools">
                         <ul id="tool-list"></ul>
                     </div>
                     <p class="bin-dir" id="bin-dir"></p>
                 </section>
 
                 <section class="pane" id="pane-options" role="tabpanel" aria-labelledby="tab-options" hidden>
-                    <h2>Quality</h2>
-                    <div class="card">
-                        <label class="row"><span class="row-text">Lossy minification</span><input type="checkbox" class="switch" data-setting="LossyEnabled"></label>
-                        <div class="slider">
-                            <span>PNG quality</span>
-                            <input type="range" min="30" max="100" step="1" data-setting="PngMinQuality">
-                            <output data-output="PngMinQuality"></output>
-                        </div>
-                        <div class="slider">
-                            <span>JPEG quality</span>
-                            <input type="range" min="30" max="100" step="1" data-setting="JpegOptimMaxQuality">
-                            <output data-output="JpegOptimMaxQuality"></output>
-                        </div>
-                        <div class="slider">
-                            <span>GIF quality</span>
-                            <input type="range" min="30" max="100" step="1" data-setting="GifQuality">
-                            <output data-output="GifQuality"></output>
-                        </div>
-                        <div class="slider">
-                            <span>WebP quality</span>
-                            <input type="range" min="30" max="100" step="1" data-setting="WebPQuality">
-                            <output data-output="WebPQuality"></output>
-                        </div>
-                        <div class="slider">
-                            <span>AVIF quality</span>
-                            <input type="range" min="30" max="100" step="1" data-setting="AvifQuality">
-                            <output data-output="AvifQuality"></output>
-                        </div>
+                    <h2 id="h-lossy">Lossy minification</h2>
+                    <div class="card" role="group" aria-labelledby="h-lossy">
+                        <label class="row"><span class="row-text">Lossy minification <small>much smaller files that can look slightly different; each format's quality is under Formats</small></span><input type="checkbox" class="switch" role="switch" data-setting="LossyEnabled"></label>
                     </div>
 
-                    <h2>Files</h2>
-                    <div class="card">
-                        <label class="row"><span class="row-text">Strip metadata from PNG</span><input type="checkbox" class="switch" data-setting="PngOutRemoveChunks"></label>
-                        <label class="row"><span class="row-text">Strip metadata from JPEG</span><input type="checkbox" class="switch" data-setting="JpegTranStripAll"></label>
-                        <label class="row"><span class="row-text">Strip metadata from WebP and AVIF <small>EXIF and XMP; the colour profile stays</small></span><input type="checkbox" class="switch" data-setting="WebPAvifStripMetadata"></label>
-                        <label class="row"><span class="row-text">Preserve file dates</span><input type="checkbox" class="switch" data-setting="PreserveDates"></label>
-                        <label class="row"><span class="row-text">Keep originals <small>copied into an “ImageOptim originals” folder beside each file before it is first changed</small></span><input type="checkbox" class="switch" data-setting="KeepOriginals"></label>
+                    <h2 id="h-files">Files</h2>
+                    <div class="card" role="group" aria-labelledby="h-files">
+                        <label class="row"><span class="row-text">Preserve file dates</span><input type="checkbox" class="switch" role="switch" data-setting="PreserveDates"></label>
+                        <label class="row"><span class="row-text">Keep originals <small>copied into an “ImageOptim originals” folder beside each file before it is first changed</small></span><input type="checkbox" class="switch" role="switch" data-setting="KeepOriginals"></label>
                     </div>
 
-                    <h2>Optimized files</h2>
-                    <div class="card">
-                        <label class="row"><span class="row-text">Skip files already optimized <small>recognised by their content, across launches; Optimize Again still runs</small></span><input type="checkbox" class="switch" data-setting="SkipOptimized"></label>
+                    <h2 id="h-history">Optimized files</h2>
+                    <div class="card" role="group" aria-labelledby="h-history">
+                        <label class="row"><span class="row-text">Skip files already optimized <small>recognised by their content, across launches; Optimize Again still runs</small></span><input type="checkbox" class="switch" role="switch" data-setting="SkipOptimized"></label>
                         <div class="row">
                             <span class="row-text" id="history-count">No files remembered</span>
                             <button type="button" id="forget-history">Forget</button>
                         </div>
                     </div>
 
-                    <h2>Performance</h2>
-                    <div class="card">
+                    <h2 id="h-performance">Performance</h2>
+                    <div class="card" role="group" aria-labelledby="h-performance">
                         <div class="row">
-                            <span class="row-text">Queue order</span>
-                            <select data-setting="QueueOrder">
+                            <label class="row-text" for="queue-order">Queue order</label>
+                            <select id="queue-order" data-setting="QueueOrder">
                                 <option value="smallest">Smallest first</option>
                                 <option value="largest">Largest first</option>
                                 <option value="added">Order added</option>
                             </select>
                         </div>
-                        <label class="row"><span class="row-text">Thorough PNG compression <small>much slower, ~0.01% smaller</small></span><input type="checkbox" class="switch" data-setting="ThoroughPng"></label>
+                        <label class="row"><span class="row-text">Thorough PNG compression <small>much slower, ~0.01% smaller</small></span><input type="checkbox" class="switch" role="switch" data-setting="ThoroughPng"></label>
                         <div class="slider">
-                            <span>Optimizers at once</span>
-                            <input type="range" min="1" max="16" step="1" data-setting="MaxWorkers">
-                            <output data-output="MaxWorkers"></output>
+                            <label for="max-workers">Optimizers at once</label>
+                            <input type="range" id="max-workers" min="1" max="16" step="1" data-setting="MaxWorkers">
+                            <output data-output="MaxWorkers" for="max-workers"></output>
                         </div>
                         <div class="slider">
-                            <span>Effort level</span>
-                            <input type="range" min="1" max="7" step="1" data-setting="AdvPngLevel">
-                            <output data-output="AdvPngLevel"></output>
+                            <label for="effort">Effort <small>higher is slower, and a little smaller</small></label>
+                            <input type="range" id="effort" min="1" max="7" step="1" data-setting="AdvPngLevel">
+                            <output data-output="AdvPngLevel" for="effort"></output>
                         </div>
                     </div>
+                    <p class="pane-note">Changes apply to files optimized from now on. Optimize Again (Ctrl+R) runs the whole list again.</p>
                 </section>
 
                 <section class="pane" id="pane-appearance" role="tabpanel" aria-labelledby="tab-appearance" hidden>
-                    <h2>Theme</h2>
-                    <div class="segmented" role="radiogroup" aria-label="Theme">
+                    <h2 id="h-theme">Theme</h2>
+                    <div class="segmented" role="radiogroup" aria-labelledby="h-theme">
                         <label><input type="radio" name="theme" value="system" data-setting="Theme"><span class="icon i-theme-system" aria-hidden="true"></span>System</label>
                         <label><input type="radio" name="theme" value="light" data-setting="Theme"><span class="icon i-theme-light" aria-hidden="true"></span>Light</label>
                         <label><input type="radio" name="theme" value="dark" data-setting="Theme"><span class="icon i-theme-dark" aria-hidden="true"></span>Dark</label>
                     </div>
 
-                    <h2>Accent color</h2>
-                    <div class="card">
-                        <div class="slider">
-                            <span>Hue</span>
-                            <input type="range" class="color-slider hue" min="0" max="359" step="1" data-setting="AccentHue">
+                    <h2 id="h-accent">Accent colour</h2>
+                    <div class="card" role="group" aria-labelledby="h-accent">
+                        <label class="row"><span class="row-text">Use the Windows accent colour <small>follows Settings › Personalisation › Colours</small></span><input type="checkbox" class="switch" role="switch" id="accent-windows"></label>
+                        <div class="slider" data-custom-accent>
+                            <label for="accent-hue">Hue</label>
+                            <input type="range" id="accent-hue" class="color-slider hue" min="0" max="359" step="1" data-setting="AccentHue">
                         </div>
-                        <div class="slider">
-                            <span>Saturation</span>
-                            <input type="range" class="color-slider saturation" min="0" max="100" step="1" data-setting="AccentSaturation">
+                        <div class="slider" data-custom-accent>
+                            <label for="accent-saturation">Saturation</label>
+                            <input type="range" id="accent-saturation" class="color-slider saturation" min="0" max="100" step="1" data-setting="AccentSaturation">
                         </div>
                         <div class="accent-preview" aria-hidden="true">
                             <span class="swatch swatch-accent"></span>
@@ -282,6 +296,9 @@
             <span>Drop to optimize</span>
         </div>
     </div>
+
+    <!-- Read out by screen readers: a batch starting and how it ended -->
+    <div id="announcer" class="visually-hidden" role="status" aria-live="polite"></div>
 
     <script src="app.js"></script>
 </body>

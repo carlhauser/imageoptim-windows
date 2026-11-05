@@ -311,7 +311,12 @@ const statusFailedEl = document.getElementById('status-failed');
 const viewNoteEl = document.getElementById('view-note');
 const filtering = () => Boolean(filter.text || filter.failedOnly);
 
+const emptyActionsEl = document.getElementById('empty-actions');
+document.getElementById('empty-add-files').addEventListener('click', () => api.chooseFiles());
+document.getElementById('empty-add-folder').addEventListener('click', () => api.chooseFolders());
+
 function updateCountsAndEmptyState() {
+    emptyActionsEl.hidden = jobs.size > 0;
     // What each tab shows: filtered while a filter is on
     const counts = { queue: views.queue.length, done: views.done.length, skipped: views.skipped.length };
     document.getElementById('count-queue').textContent = formatCount(counts.queue);
@@ -672,7 +677,22 @@ api.onMenuCommand((command) => {
 
 // The bar along the top of the status bar, and the time left beside it.
 // lib/eta.js decides the numbers and the wording.
+// The announcer: a few words for screen readers when a batch starts and
+// when it ends, nothing in between
+const announcerEl = document.getElementById('announcer');
+let announcedBatch = false;
+
+function announce(text) {
+    announcerEl.textContent = '';
+    // A fresh node each time, so the same words are read again
+    setTimeout(() => { announcerEl.textContent = text; }, 50);
+}
+
 function renderBatch(batch) {
+    if (batch && !announcedBatch) {
+        announcedBatch = true;
+        announce(`Optimizing ${whole.format(batch.total)} file${batch.total === 1 ? '' : 's'}`);
+    }
     batchProgressEl.hidden = !batch;
     if (!batch) return;
     batchProgressEl.style.setProperty('--fraction', batch.fraction.toFixed(4));
@@ -778,11 +798,42 @@ document.getElementById('again').addEventListener('click', () => api.again());
 document.getElementById('stop').addEventListener('click', () => api.stop());
 document.getElementById('clear').addEventListener('click', () => api.clear());
 
-document.getElementById('toggle-settings').addEventListener('click', (event) => {
-    const open = settingsEl.hidden;
+const toggleSettingsEl = document.getElementById('toggle-settings');
+
+function setSettingsOpen(open) {
     settingsEl.hidden = !open;
-    event.currentTarget.setAttribute('aria-expanded', String(open));
-    if (open) loadTools();
+    toggleSettingsEl.setAttribute('aria-expanded', String(open));
+    if (open) {
+        loadTools();
+        // Into the panel, on its selected tab
+        (settingsEl.querySelector('[role="tab"][aria-selected="true"]') || settingsEl).focus();
+    } else if (settingsEl.contains(document.activeElement) || document.activeElement === document.body) {
+        toggleSettingsEl.focus();
+    }
+}
+
+toggleSettingsEl.addEventListener('click', () => setSettingsOpen(settingsEl.hidden));
+
+settingsEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        setSettingsOpen(false);
+        return;
+    }
+    // In a narrow window the panel covers the list: Tab goes round inside it
+    if (event.key !== 'Tab' || getComputedStyle(settingsEl).position !== 'absolute') return;
+    const focusable = [...settingsEl.querySelectorAll('button, input, select, [tabindex="0"]')]
+        .filter((el) => !el.disabled && el.offsetParent !== null && el.tabIndex >= 0);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+    }
 });
 
 // Settings tabs: a plain WAI-ARIA tab list, with the arrow keys moving
@@ -851,11 +902,81 @@ window.addEventListener('drop', (event) => {
 // the lightnesses style.css uses. The default 80% gives the shipped blue.
 const MAX_ACCENT_CHROMA = 0.195;
 
+// Every setting as last known, for what depends on more than one of them
+const current = {};
+let windowsAccentHex = null; // RRGGBB, from main.js
+
+// The OKLCH hue and chroma of an sRGB colour, so Windows' accent can be used
+// the way the sliders are: at style.css's own lightnesses, which keep text on
+// and in it readable whatever the colour.
+function oklchOf(hex) {
+    const linear = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+        .map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    const [r, g, b] = linear;
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const q = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    const a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * q;
+    const bb = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * q;
+    const hue = (Math.atan2(bb, a) * 180) / Math.PI;
+    return { h: (hue + 360) % 360, c: Math.sqrt(a * a + bb * bb) };
+}
+
 function applyAccent(values) {
+    Object.assign(current, values);
     const root = document.documentElement.style;
-    if ('AccentHue' in values) root.setProperty('--accent-h', String(values.AccentHue));
-    if ('AccentSaturation' in values) {
-        root.setProperty('--accent-c', (values.AccentSaturation / 100 * MAX_ACCENT_CHROMA).toFixed(4));
+    let hue = current.AccentHue;
+    let chroma = (current.AccentSaturation / 100) * MAX_ACCENT_CHROMA;
+    if (current.AccentSource === 'windows' && windowsAccentHex) {
+        const accent = oklchOf(windowsAccentHex);
+        hue = accent.h;
+        chroma = Math.min(MAX_ACCENT_CHROMA, accent.c);
+    }
+    if (Number.isFinite(hue)) root.setProperty('--accent-h', hue.toFixed(1));
+    if (Number.isFinite(chroma)) root.setProperty('--accent-c', chroma.toFixed(4));
+    const useWindows = current.AccentSource === 'windows';
+    accentWindowsEl.checked = useWindows;
+    for (const el of settingsEl.querySelectorAll('[data-custom-accent]')) {
+        el.classList.toggle('off', useWindows);
+        for (const input of el.querySelectorAll('input')) input.disabled = useWindows;
+    }
+}
+
+const accentWindowsEl = document.getElementById('accent-windows');
+accentWindowsEl.addEventListener('change', async () => {
+    const value = accentWindowsEl.checked ? 'windows' : 'custom';
+    applyAccent({ AccentSource: value });
+    applySettings(await api.setSettings({ AccentSource: value }));
+});
+
+// What a slider's number means
+const EFFORT = { 1: 'Fastest', 2: 'Fast', 4: 'Normal', 5: 'Extra', 6: 'Insane', 7: 'Maximum' };
+const QUALITY_KEYS = ['PngMinQuality', 'JpegOptimMaxQuality', 'GifQuality', 'WebPQuality', 'AvifQuality'];
+const HUES = [[20, 'red'], [50, 'orange'], [75, 'yellow'], [160, 'green'], [200, 'teal'], [265, 'blue'], [320, 'purple'], [360, 'pink']];
+
+function describeValue(key, value) {
+    if (QUALITY_KEYS.includes(key)) return Number(value) >= 100 ? 'Lossless' : String(value);
+    if (key === 'AdvPngLevel') return EFFORT[value] ? `${value} · ${EFFORT[value]}` : String(value);
+    if (key === 'AccentHue') return `${HUES.find(([upTo]) => value <= upTo)[1]}, ${value}°`;
+    if (key === 'AccentSaturation') return `${value}%`;
+    return String(value);
+}
+
+function showValue(input, value) {
+    const key = input.dataset.setting;
+    const text = describeValue(key, value);
+    input.setAttribute('aria-valuetext', text);
+    const output = settingsEl.querySelector(`[data-output="${key}"]`);
+    if (output) output.value = text;
+}
+
+// A row that does nothing without another setting is disabled, and its small
+// print says which (index.html data-requires)
+function applyRequirements() {
+    for (const el of settingsEl.querySelectorAll('[data-requires]')) {
+        const off = !current[el.dataset.requires];
+        el.classList.toggle('off', off);
+        for (const input of el.querySelectorAll('input, select')) input.disabled = off;
     }
 }
 
@@ -869,6 +990,7 @@ function updateFill(input) {
 
 function applySettings(values) {
     applyAccent(values);
+    applyRequirements();
     if ('LossyEnabled' in values) statusLossyEl.hidden = !values.LossyEnabled;
     if ('KeepOriginals' in values) {
         keepOriginals = Boolean(values.KeepOriginals);
@@ -889,8 +1011,7 @@ function applySettings(values) {
         } else {
             input.value = values[key];
             updateFill(input);
-            const output = settingsEl.querySelector(`[data-output="${key}"]`);
-            if (output) output.value = values[key];
+            if (input.type === 'range') showValue(input, values[key]);
         }
     }
 }
@@ -906,16 +1027,16 @@ settingsEl.addEventListener('input', async (event) => {
     else value = Number(input.value);
 
     updateFill(input);
-    const output = settingsEl.querySelector(`[data-output="${key}"]`);
-    if (output) output.value = value;
+    if (input.type === 'range') showValue(input, value);
     // Recolour while dragging rather than after the round trip to main
     applyAccent({ [key]: value });
+    applyRequirements();
 
     applySettings(await api.setSettings({ [key]: value }));
 });
 
 document.getElementById('reset-settings').addEventListener('click', async () => {
-    applySettings(await api.resetSettings());
+    if (await api.confirm('reset-settings')) applySettings(await api.resetSettings());
 });
 
 // Settings → Options → Optimized files
@@ -930,7 +1051,7 @@ function renderHistory({ count }) {
 }
 
 forgetHistoryButton.addEventListener('click', async () => {
-    renderHistory(await api.forgetHistory());
+    if (await api.confirm('forget-history')) renderHistory(await api.forgetHistory());
 });
 
 async function loadTools() {
@@ -985,6 +1106,14 @@ api.onProgress(renderStats);
 api.onScan(renderScan);
 api.onIdle((stats) => {
     renderStats(stats);
+    if (announcedBatch) {
+        announcedBatch = false;
+        const parts = [stats.savedBytes
+            ? `Finished. Saved ${formatBytes(stats.savedBytes)} of ${formatBytes(stats.originalTotal)}`
+            : 'Finished. Nothing could be made smaller'];
+        if (stats.failed) parts.push(`${whole.format(stats.failed)} failed`);
+        announce(parts.join('. '));
+    }
     if (!settingsEl.hidden) api.historyStats().then(renderHistory);
 });
 api.onReset(resetJobs);
@@ -992,7 +1121,13 @@ api.onRemoved(removeJobs);
 api.onSettingsChanged(applySettings);
 api.onUpdateState(renderUpdate);
 
+api.onWindowsAccent((color) => {
+    windowsAccentHex = color;
+    applyAccent({});
+});
+
 (async function init() {
+    windowsAccentHex = await api.getWindowsAccent();
     applySettings(await api.getSettings());
     await refresh();
     renderUpdate(await api.getUpdateState());

@@ -102,6 +102,9 @@ const DEFAULTS = {
     // is picked. The default is the blue the app ships with.
     AccentHue: 253,
     AccentSaturation: 80,
+    // 'windows' takes the hue and strength of Windows' own accent colour
+    // (Settings, Personalisation, Colours); 'custom' uses the two above.
+    AccentSource: 'windows',
 
     // 'system' follows Windows; 'light' and 'dark' override it for this app.
     Theme: 'system',
@@ -159,6 +162,7 @@ const SCHEMA = {
     ThoroughPng: bool,
     AccentHue: int(0, 359),
     AccentSaturation: int(0, 100),
+    AccentSource: oneOf('windows', 'custom'),
     Theme: oneOf('system', 'light', 'dark'),
     ConfirmDiscardBackups: bool,
 };
@@ -193,6 +197,13 @@ function migrate(stored) {
         // Version 0 saved MaxWorkers' default along with everything else,
         // pinning this PC's core count as though the user had chosen it
         if (values.MaxWorkers === defaultWorkers()) delete values.MaxWorkers;
+    }
+    // Before AccentSource, a colour picked with the sliders was the only
+    // kind: whoever moved them keeps theirs rather than Windows'
+    if (!('AccentSource' in values) && (
+        ('AccentHue' in values && values.AccentHue !== DEFAULTS.AccentHue)
+        || ('AccentSaturation' in values && values.AccentSaturation !== DEFAULTS.AccentSaturation))) {
+        values.AccentSource = 'custom';
     }
     delete values.version;
     return values;
