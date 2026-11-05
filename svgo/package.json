@@ -17,7 +17,7 @@
   },
   "homepage": "https://github.com/pornel/ImageOptim#readme",
   "dependencies": {
-    "svgo": "^3.3.5"
+    "svgo": "^4.1.0"
   },
   "devDependencies": {
     "json-loader": "^0.5.7",
