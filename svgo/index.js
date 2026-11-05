@@ -25,6 +25,13 @@ const defaults = [
 // addAttributesToSVGElement, addClassesToSVGElement, removeAttrs and
 // removeElementsByAttr are omitted: they need parameters this script never
 // passed, so they did nothing under svgo 1 and are errors under svgo 3.
+//
+// So are four that change what a standalone file shows rather than how it is
+// written: removeXMLNS (meant for SVG inlined in HTML; a .svg file without its
+// namespace no longer opens as an image), removeRasterImages (drops embedded
+// pictures), removeStyleElement (drops the CSS the drawing is styled with),
+// and removeViewBox, which together with removeDimensions left a file with no
+// size at all.
 const lossy = [
     'cleanupEnableBackground',
     'cleanupIds', // renamed from cleanupIDs in svgo 2
@@ -38,15 +45,11 @@ const lossy = [
     'removeDimensions',
     'removeHiddenElems',
     'removeMetadata',
-    'removeRasterImages',
-    'removeStyleElement',
     'removeTitle',
     'removeUnknownsAndDefaults',
     'removeUnusedNS',
     'removeUselessDefs',
     'removeUselessStrokeAndFill',
-    'removeViewBox',
-    'removeXMLNS',
 ];
 
 try {
@@ -62,6 +65,9 @@ try {
     // svgo 1's `full: true` did.
     const result = optimize(svgstr, {
         path: inFile,
+        // Another pass often finds a little more once the first has merged
+        // paths and collapsed groups
+        multipass: true,
         plugins: plugins,
     });
 
