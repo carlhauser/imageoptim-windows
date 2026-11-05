@@ -24,7 +24,7 @@ const defaults = [
 
 // addAttributesToSVGElement, addClassesToSVGElement, removeAttrs and
 // removeElementsByAttr are omitted: they need parameters this script never
-// passed, so they did nothing under svgo 1 and are errors under svgo 3.
+// passed, so they did nothing under svgo 1 and are errors since svgo 3.
 //
 // So are four that change what a standalone file shows rather than how it is
 // written: removeXMLNS (meant for SVG inlined in HTML; a .svg file without its
@@ -58,9 +58,10 @@ function optimizeFile(useLossy, inFile, outFile) {
 
     const plugins = useLossy == "1" ? defaults.concat(lossy) : defaults;
 
-    // svgo 3's optimize() is synchronous and throws instead of resolving an
-    // error, and listing plugins explicitly replaces preset-default the way
-    // svgo 1's `full: true` did.
+    // Since svgo 3 optimize() is synchronous and throws instead of resolving
+    // an error, and listing plugins explicitly replaces preset-default the way
+    // svgo 1's `full: true` did - so svgo 4 dropping removeViewBox and
+    // removeTitle from that preset changes nothing here.
     const result = optimize(svgstr, {
         path: inFile,
         // Another pass often finds a little more once the first has merged

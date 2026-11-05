@@ -15,4 +15,8 @@ module.exports = {
     optimization: {
         minimize: true,
     },
+    // svgo 4's loadConfig() imports svgo.config.js by a computed path, which
+    // webpack cannot follow. index.js passes its config directly and never
+    // calls it.
+    ignoreWarnings: [{ module: /svgo-node\.cjs$/, message: /Critical dependency/ }],
 };
