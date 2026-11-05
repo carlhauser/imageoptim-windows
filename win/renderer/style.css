@@ -301,17 +301,6 @@ main {
     display: flex;
 }
 
-/* Queue / Done / Skipped: each view shows only its own rows (app.js keeps
-   the counts). #file-table in each selector, to outrank
-   `#file-table tr { display: table }`. */
-.list-pane[data-view="queue"] #file-table tbody tr:not([data-state="queued"]):not([data-state="running"]),
-.list-pane[data-view="done"] #file-table tbody tr[data-state="queued"],
-.list-pane[data-view="done"] #file-table tbody tr[data-state="running"],
-.list-pane[data-view="done"] #file-table tbody tr[data-state="skipped"],
-.list-pane[data-view="skipped"] #file-table tbody tr:not([data-state="skipped"]) {
-    display: none;
-}
-
 /* Queue / Done / Skipped, at the left of the toolbar. .tabs.list-tabs, to outrank the
    settings tabs' rules further down. */
 .tabs.list-tabs {
@@ -358,6 +347,20 @@ main {
     /* Separate, so each row can have rounded corners */
     border-collapse: separate;
     border-spacing: 0;
+}
+
+/* The rows out of sight, which app.js does not create: one block above the
+   rows shown and one below, as tall as the rows they stand for */
+#file-table tr.spacer {
+    display: block;
+    background: none;
+}
+
+/* The grid is one tab stop; the row the arrow keys are on carries the ring */
+#file-table:focus-visible { outline: none; }
+#file-table:focus-visible tr.active {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
 }
 
 #file-table thead,

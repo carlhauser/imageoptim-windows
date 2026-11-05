@@ -21,6 +21,11 @@ const path = require('path');
 
 const DEFAULT_CAP = 50000;
 
+// Paths remembered per content hash when the store is compacted. The same
+// file copied to many places shares one hash; keeping every path kept the
+// store over its cap, and it was then rewritten after every single record.
+const STAT_KEYS_PER_HASH = 4;
+
 // 128 bits of SHA-256 is plenty to tell files apart and halves the store
 const shortHash = (hash) => hash.digest('hex').slice(0, 32);
 
@@ -62,10 +67,15 @@ function satisfies(entry, wanted) {
 }
 
 class History {
-    constructor(filePath, { cap = DEFAULT_CAP, now = Date.now } = {}) {
+    // batchMs: how long records may wait to be written, so that a batch of
+    // files is one write rather than one per file. 0 writes each at once.
+    constructor(filePath, { cap = DEFAULT_CAP, now = Date.now, batchMs = 0 } = {}) {
         this.filePath = filePath;
         this.cap = cap;
         this.now = now;
+        this.batchMs = batchMs;
+        this.unwritten = []; // lines waiting for flush()
+        this.timer = null;
         // content hash -> { t: type, p: profile, at, w }. w: this app wrote
         // that content, as opposed to finding it already as good as it gets.
         this.byHash = new Map();
@@ -75,6 +85,7 @@ class History {
     }
 
     load() {
+        this.flush();
         this.byHash.clear();
         this.byStat.clear();
         this.lines = 0;
@@ -142,16 +153,33 @@ class History {
         if (written) record.w = 1;
         if (key) record.s = key;
         this.apply(record);
+        this.unwritten.push(JSON.stringify(record));
+        this.lines += 1;
+        if (this.lines > this.cap * 1.25) {
+            this.compact();
+        } else if (!this.batchMs) {
+            this.flush();
+        } else if (!this.timer) {
+            this.timer = setTimeout(() => this.flush(), this.batchMs);
+            if (this.timer.unref) this.timer.unref();
+        }
+    }
+
+    // Appends what record() has collected. Called on quit too.
+    flush() {
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
+        if (!this.unwritten.length) return;
+        const lines = this.unwritten.splice(0);
         try {
             fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-            fs.appendFileSync(this.filePath, `${this.needsNewline ? '\n' : ''}${JSON.stringify(record)}\n`);
+            fs.appendFileSync(this.filePath, `${this.needsNewline ? '\n' : ''}${lines.join('\n')}\n`);
             this.needsNewline = false;
-            this.lines += 1;
         } catch (err) {
             console.warn('Could not update the optimized-files list:', err.message);
-            return;
         }
-        if (this.lines > this.cap * 1.25) this.compact();
     }
 
     // Keeps the newest `cap` files, written beside the store and renamed over
@@ -161,9 +189,15 @@ class History {
             .sort((a, b) => b[1].at - a[1].at)
             .slice(0, this.cap);
         const kept = new Set(keep.map(([hash]) => hash));
+        // The newest few paths for each file: later entries in byStat are
+        // the more recent
         const keys = new Map();
         for (const [key, hash] of this.byStat) {
-            if (kept.has(hash)) keys.set(hash, [...(keys.get(hash) || []), key]);
+            if (!kept.has(hash)) continue;
+            const list = keys.get(hash) || [];
+            list.push(key);
+            if (list.length > STAT_KEYS_PER_HASH) list.shift();
+            keys.set(hash, list);
         }
 
         const out = [];
@@ -179,17 +213,31 @@ class History {
 
         const staging = `${this.filePath}.tmp`;
         try {
+            fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
             fs.writeFileSync(staging, out.length ? `${out.join('\n')}\n` : '');
             fs.renameSync(staging, this.filePath);
         } catch (err) {
             console.warn('Could not compact the optimized-files list:', err.message);
             try { fs.unlinkSync(staging); } catch (e) { /* not there */ }
+            this.flush(); // keep the records at least
             return;
         }
-        this.load();
+        // The rewrite holds everything, including what was waiting to be
+        // appended. The maps are trimmed to match rather than read back.
+        if (this.timer) clearTimeout(this.timer);
+        this.timer = null;
+        this.unwritten = [];
+        this.needsNewline = false;
+        this.lines = out.length;
+        this.byHash = new Map(keep); // oldest first, as load() leaves it
+        this.byStat = new Map();
+        for (const [hash, list] of keys) for (const key of list) this.byStat.set(key, hash);
     }
 
     forget() {
+        if (this.timer) clearTimeout(this.timer);
+        this.timer = null;
+        this.unwritten = [];
         this.byHash.clear();
         this.byStat.clear();
         this.lines = 0;

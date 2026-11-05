@@ -63,6 +63,8 @@ function makeResolver(binDir) {
 // become two jobs racing to overwrite it, and NTFS ignores case, while 8.3
 // short names, junctions, subst drives and mapped drives all give one file
 // other names. The resolved path is used, in lower case on Windows.
+const keyCase = (real) => (process.platform === 'win32' ? real.toLowerCase() : real);
+
 function fileKey(filePath) {
     let real = path.resolve(filePath);
     try {
@@ -70,8 +72,36 @@ function fileKey(filePath) {
     } catch (err) {
         /* gone or unreadable: its literal path will do */
     }
-    return process.platform === 'win32' ? real.toLowerCase() : real;
+    return keyCase(real);
 }
+
+// The same, without blocking: adding a folder of 20,000 files resolves 20,000
+// paths, and the main process is what keeps the window responsive.
+async function fileKeyAsync(filePath) {
+    let real = path.resolve(filePath);
+    try {
+        real = await fs.promises.realpath(real);
+    } catch (err) {
+        /* gone or unreadable: its literal path will do */
+    }
+    return keyCase(real);
+}
+
+// Runs fn over items with at most `limit` running at once, keeping the order
+async function mapLimit(items, limit, fn) {
+    const results = new Array(items.length);
+    let next = 0;
+    const lanes = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (next < items.length) {
+            const i = next++;
+            results[i] = await fn(items[i], i);
+        }
+    });
+    await Promise.all(lanes);
+    return results;
+}
+
+const isImageName = (name) => EXTENSIONS.includes(path.extname(name).toLowerCase());
 
 // Port of DirScanner.m: dropping a folder queues every image inside it.
 //
@@ -80,13 +110,35 @@ function fileKey(filePath) {
 // path: a junction or symlink pointing back up its own tree used to be followed
 // forever, and because such a cycle contains no new images the file-count cap
 // never stopped it either.
-async function expandPaths(inputPaths, limit = 20000) {
+//
+// A folder's entries say whether each is a file or a folder, so only what was
+// passed in, and links, are looked up one by one; files are picked by name.
+// Every entry used to be stat'ed in turn, images or not.
+//
+// Returns the files found, with `truncated` set on the array when there were
+// more than `limit`. onProgress(count) hears as they are found; a signal stops
+// the walk where it is.
+async function expandPaths(inputPaths, { limit = 20000, signal = null, onProgress = null } = {}) {
     const files = [];
     const seenFiles = new Set();
     const seenDirs = new Set();
-    const pending = [...inputPaths];
+    const pending = [...inputPaths]; // folders, and anything not yet looked at
+    let truncated = false;
 
-    while (pending.length && files.length < limit) {
+    const addFile = (filePath) => {
+        const key = path.resolve(filePath);
+        if (seenFiles.has(key)) return;
+        seenFiles.add(key);
+        if (files.length >= limit) {
+            truncated = true;
+            return;
+        }
+        files.push(key);
+        if (onProgress) onProgress(files.length);
+    };
+
+    while (pending.length && !truncated) {
+        if (signal && signal.aborted) break;
         const current = pending.shift();
         let stat;
         try {
@@ -95,40 +147,45 @@ async function expandPaths(inputPaths, limit = 20000) {
             continue;
         }
 
-        if (stat.isDirectory()) {
-            let real = current;
-            try {
-                real = await fs.promises.realpath(current);
-            } catch (err) {
-                /* unresolvable: fall back to the literal path */
-            }
-            if (seenDirs.has(real)) continue;
-            seenDirs.add(real);
-
-            let entries = [];
-            try {
-                entries = await fs.promises.readdir(current, { withFileTypes: true });
-            } catch (err) {
-                continue;
-            }
-            for (const entry of entries) {
-                if (entry.name.startsWith('.')) continue;
-                // Kept originals are never optimized (Keep originals)
-                if (entry.isDirectory() && isOriginalsDir(entry.name)) continue;
-                pending.push(path.join(current, entry.name));
-            }
+        if (stat.isFile()) {
+            if (isImageName(current)) addFile(current);
             continue;
         }
+        if (!stat.isDirectory()) continue;
 
-        if (!stat.isFile()) continue;
-        if (!EXTENSIONS.includes(path.extname(current).toLowerCase())) continue;
+        let real = current;
+        try {
+            real = await fs.promises.realpath(current);
+        } catch (err) {
+            /* unresolvable: fall back to the literal path */
+        }
+        if (seenDirs.has(real)) continue;
+        seenDirs.add(real);
 
-        const key = path.resolve(current);
-        if (seenFiles.has(key)) continue;
-        seenFiles.add(key);
-        files.push(key);
+        let entries = [];
+        try {
+            entries = await fs.promises.readdir(current, { withFileTypes: true });
+        } catch (err) {
+            continue;
+        }
+        for (const entry of entries) {
+            if (entry.name.startsWith('.')) continue;
+            const entryPath = path.join(current, entry.name);
+            if (entry.isFile()) {
+                if (isImageName(entry.name)) addFile(entryPath);
+            } else if (entry.isDirectory()) {
+                // Kept originals are never optimized (Keep originals)
+                if (!isOriginalsDir(entry.name)) pending.push(entryPath);
+            } else if (entry.isSymbolicLink()) {
+                // A link or junction: whether it leads to a file or a folder
+                // is only known by following it
+                pending.push(entryPath);
+            }
+            if (truncated) break;
+        }
     }
 
+    files.truncated = truncated;
     return files;
 }
 
@@ -146,6 +203,9 @@ class Queue extends EventEmitter {
         this.semaphore = new Semaphore(this.workerLimit());
         this.now = options.now || Date.now;
         this.history = options.history || null;
+        // Bumped by Stop and Clear, so that a folder still being scanned when
+        // they happen adds nothing afterwards
+        this.generation = 0;
         // Time left for the files queued since the queue was last empty
         this.batch = new BatchTracker({ now: this.now });
     }
@@ -153,6 +213,7 @@ class Queue extends EventEmitter {
     // Puts a job at the back of the queue and into the current batch
     enqueue(job) {
         this.pending.push(job);
+        job.waiting = true;
         job.setState('queued');
         this.batch.enqueue(job.id, job.costClass(this.settings.all()), job.bestSize || job.originalSize);
     }
@@ -196,12 +257,29 @@ class Queue extends EventEmitter {
         return [...seen.values()];
     }
 
+    // Adds files and folders. A scan that Stop or Clear interrupts is dropped:
+    // the files it found must not turn up afterwards.
     async add(inputPaths) {
-        const files = await expandPaths(inputPaths);
-        const added = [];
+        const generation = this.generation;
+        const stale = () => generation !== this.generation;
+        const files = await expandPaths(inputPaths, {
+            onProgress: (found) => this.emit('scan', { found, done: false }),
+        });
+        this.emit('scan', { found: files.length, done: true, truncated: Boolean(files.truncated) });
+        if (stale()) return { added: 0, truncated: false };
 
-        for (const filePath of files) {
-            const id = fileKey(filePath);
+        // Each file's identity and size, a few dozen at a time
+        const found = await mapLimit(files, 24, async (filePath) => {
+            const [id, stat] = await Promise.all([
+                fileKeyAsync(filePath),
+                fs.promises.stat(filePath).catch(() => null),
+            ]);
+            return { filePath, id, stat };
+        });
+        if (stale()) return { added: 0, truncated: false };
+
+        const added = [];
+        for (const { filePath, id, stat } of found) {
             let job = this.jobs.get(id);
             const isNew = !job;
             if (isNew) {
@@ -212,7 +290,9 @@ class Queue extends EventEmitter {
                     estimate: (estimated) => this.batch.jobFraction(estimated.id),
                     history: this.history,
                 });
-                job.on('change', (snapshot) => this.emit('job', snapshot));
+                // The job itself, not a snapshot: whoever listens decides when
+                // to serialize it, which with thousands of files matters
+                job.on('change', (changed) => this.emit('job', changed));
                 this.jobs.set(id, job);
                 if (isInOriginals(filePath)) {
                     // Dropped in directly, or a whole originals folder dropped:
@@ -227,11 +307,11 @@ class Queue extends EventEmitter {
             // A new file, or one that could not be opened before and is
             // dropped again - it may have been unlocked or come back since
             if (isNew || (job.unreadable && !job.blocked)) {
-                try {
-                    job.originalSize = fs.statSync(filePath).size;
+                if (stat) {
+                    job.originalSize = stat.size;
                     job.bestSize = job.originalSize;
                     job.unreadable = false;
-                } catch (err) {
+                } else {
                     job.unreadable = true;
                     job.setState('error', 'Can’t open the file');
                 }
@@ -239,10 +319,10 @@ class Queue extends EventEmitter {
             added.push(job);
             // Queueing a job that is already pending or mid-run would give two
             // concurrent runs over one file, racing in save().
-            if (!job.unreadable && !job.isRunning && !this.pending.includes(job)) {
+            if (!job.unreadable && !job.isRunning && !job.waiting) {
                 // A result from this session stays on show; a file first seen
                 // now goes straight to Done.
-                if (this.remembered(job)) {
+                if (this.remembered(job, stat)) {
                     if (job.state !== 'done') job.markSkipped();
                 } else {
                     this.enqueue(job);
@@ -254,7 +334,8 @@ class Queue extends EventEmitter {
             this.sortPending();
             this.start();
         }
-        return added.map((job) => job.toJSON());
+        // Counts only: the window hears about each file through its events
+        return { added: added.length, truncated: Boolean(files.truncated) };
     }
 
     snapshot() {
@@ -264,10 +345,10 @@ class Queue extends EventEmitter {
     // Optimized before and not changed since, recognised from its directory
     // entry alone. Anything less certain is left to the job, which hashes the
     // content before it starts work.
-    remembered(job) {
-        if (!this.history || !this.settings.get('SkipOptimized')) return false;
+    remembered(job, stat) {
+        if (!this.history || !this.settings.get('SkipOptimized') || !stat) return false;
         try {
-            const entry = this.history.findByStat(statKey(job.filePath, fs.statSync(job.filePath)));
+            const entry = this.history.findByStat(statKey(job.filePath, stat));
             return satisfies(entry, profileFor(entry && entry.t, this.settings.all()));
         } catch (err) {
             return false;
@@ -305,6 +386,7 @@ class Queue extends EventEmitter {
 
         while (this.running < limit && this.pending.length) {
             const job = this.pending.shift();
+            job.waiting = false;
             this.running += 1;
 
             // Each job gets its own controller as well as the batch one, so a
@@ -333,7 +415,7 @@ class Queue extends EventEmitter {
                         job.cleanup(); // removed or cleared while it ran
                     }
                     if (!this.pending.length && this.running === 0) this.batch.end();
-                    this.emit('progress', this.stats());
+                    this.emit('progress');
                     if (this.pending.length) {
                         this.pump();
                     } else if (this.running === 0) {
@@ -342,18 +424,22 @@ class Queue extends EventEmitter {
                 });
         }
 
-        this.emit('progress', this.stats());
+        this.emit('progress');
     }
 
     stop() {
+        this.generation += 1;
         // Files still waiting are stopped too, so they leave the Queue tab
         // along with the ones that were running.
-        for (const job of this.pending) job.setState('stopped');
+        for (const job of this.pending) {
+            job.waiting = false;
+            job.setState('stopped');
+        }
         this.pending.length = 0;
         this.batch.end();
         if (this.controller) this.controller.abort();
         for (const controller of this.controllers.values()) controller.abort();
-        this.emit('progress', this.stats());
+        this.emit('progress');
     }
 
     clear() {
@@ -361,7 +447,7 @@ class Queue extends EventEmitter {
         // discard() also removes the backup copy of each original, which used
         // to be left in the temp directory forever.
         for (const job of [...this.jobs.values()]) this.discard(job);
-        this.emit('progress', this.stats());
+        this.emit('progress');
     }
 
     remove(ids) {
@@ -375,18 +461,19 @@ class Queue extends EventEmitter {
             const controller = this.controllers.get(id);
             if (controller) controller.abort();
             removed.add(job);
+            job.waiting = false;
             this.batch.drop(id);
             this.discard(job);
         }
         if (removed.size) this.pending = this.pending.filter((job) => !removed.has(job));
-        this.emit('progress', this.stats());
+        this.emit('progress');
     }
 
     // Re-runs everything with the current settings, the way the macOS app does
     // when the optimizer preferences change.
     again() {
         for (const job of this.jobs.values()) {
-            if (job.isRunning || this.pending.includes(job) || job.blocked) continue;
+            if (job.isRunning || job.waiting || job.blocked) continue;
             job.force = true;
             this.enqueue(job);
         }
@@ -399,7 +486,7 @@ class Queue extends EventEmitter {
         if (!job) return { ok: false, reason: 'that file is no longer in the list' };
         // A run in progress would finish by marking the file done and
         // overwrite "reverted", and a queued one would optimize it again
-        if (job.isRunning || this.pending.includes(job)) {
+        if (job.isRunning || job.waiting) {
             return { ok: false, reason: 'it is being optimized; stop it first' };
         }
         return job.revert(this.settings.all());
@@ -466,4 +553,4 @@ class Queue extends EventEmitter {
     }
 }
 
-module.exports = { Queue, expandPaths, makeResolver, fileKey };
+module.exports = { Queue, expandPaths, makeResolver, fileKey, mapLimit };

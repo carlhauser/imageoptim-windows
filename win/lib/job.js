@@ -40,12 +40,13 @@ function tempPath(toolId) {
     return path.join(tempDir(), `${toolId}.${unique}.temp`);
 }
 
-// Removes our own scratch directory, plus any left behind by a previous run that
-// was killed. Called at startup and again on quit.
-function sweepTempDirs() {
+// Removes scratch directories left behind by a previous run that was killed.
+// Called shortly after startup; asynchronous, since %TEMP% can be large and
+// the main process is what keeps the window responsive.
+async function sweepTempDirs() {
     let entries = [];
     try {
-        entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true });
+        entries = await fs.promises.readdir(os.tmpdir(), { withFileTypes: true });
     } catch (err) {
         return;
     }
@@ -54,7 +55,7 @@ function sweepTempDirs() {
         const dir = path.join(os.tmpdir(), entry.name);
         if (dir === tempRoot) continue; // ours, still in use
         try {
-            fs.rmSync(dir, { recursive: true, force: true });
+            await fs.promises.rm(dir, { recursive: true, force: true });
         } catch (err) {
             /* another instance may still own it */
         }
@@ -162,6 +163,7 @@ class Job extends EventEmitter {
         this.estimate = options.estimate || null;
         this.history = options.history || null; // lib/history.js, if any
         this.force = false; // Again: optimize even if already optimized
+        this.waiting = false; // in the queue's pending list (lib/queue.js)
         this.inputHash = null;
 
         this.type = null;
@@ -265,8 +267,10 @@ class Job extends EventEmitter {
         return Boolean(this.bestSize) && this.bestSize < this.originalSize;
     }
 
+    // Shown in the window, so it must be cheap: every change sends it. revert()
+    // still checks the backup is really there before it does anything.
     get canRevert() {
-        return Boolean(this.backupPath) && fs.existsSync(this.backupPath);
+        return Boolean(this.backupPath);
     }
 
     toJSON() {
@@ -292,7 +296,7 @@ class Job extends EventEmitter {
     setState(state, error) {
         this.state = state;
         this.error = error || null;
-        this.emit('change', this.toJSON());
+        this.emit('change', this);
     }
 
     // Keeps the candidate only when it is genuinely smaller, exactly as
@@ -308,13 +312,15 @@ class Job extends EventEmitter {
         this.bestSize = size;
         this.bestTool = label;
         unlinkQuietly(previous);
-        this.emit('change', this.toJSON());
+        this.emit('change', this);
         return true;
     }
 
     // Which optimizers apply, and in which order. Ports the switch in
     // doEnqueueWorkersInCPUQueue.
-    planTools(settings) {
+    // underUtilized: fewer files are waiting or running than there are worker
+    // slots (lib/queue.js), so cores would otherwise sit idle.
+    planTools(settings, { underUtilized = false } = {}) {
         const hasBeenRunBefore = this.runCount > 0;
         const lossyEnabled = Boolean(settings.LossyEnabled);
         let level = Number(settings.AdvPngLevel) || 4;
@@ -422,7 +428,7 @@ class Job extends EventEmitter {
             // Not installed. Still counts as finished, or the progress fraction
             // never reaches 1 and the row looks stuck.
             this.toolsDone += 1;
-            this.emit('change', this.toJSON());
+            this.emit('change', this);
             return null;
         }
 
@@ -486,7 +492,7 @@ class Job extends EventEmitter {
         }
 
         this.toolsDone += 1;
-        this.emit('change', this.toJSON());
+        this.emit('change', this);
 
         if (!result || signal.aborted) {
             unlinkQuietly(temp);
@@ -643,7 +649,7 @@ class Job extends EventEmitter {
             return;
         }
 
-        this.emit('change', this.toJSON());
+        this.emit('change', this);
 
         // Destructive passes, strictly in order: each one sees the previous result
         for (const step of runFirst) {
@@ -854,7 +860,9 @@ class Job extends EventEmitter {
     }
 
     revert(settings = {}) {
-        if (!this.canRevert) return { ok: false, reason: 'there is no backup of this file' };
+        if (!this.backupPath || !fs.existsSync(this.backupPath)) {
+            return { ok: false, reason: 'there is no backup of this file' };
+        }
 
         // Reverting over a file someone edited after we saved would destroy their
         // change, and the backup predates it, so there would be no way back.

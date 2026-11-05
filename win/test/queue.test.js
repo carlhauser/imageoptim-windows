@@ -285,10 +285,50 @@ test('a file that could not be opened is looked at again when dropped again', as
     await queue.add([file]);
     const job = queue.find(file);
     queue.pending.length = 0;
+    job.waiting = false;
     job.unreadable = true;
     job.setState('error', 'Can’t open the file');
 
     await queue.add([file]);
     assert.strictEqual(job.unreadable, false);
     assert.strictEqual(queue.pending.length, 1, 'queued this time');
+});
+
+// ------------------------------------------------------------- the folder scan
+
+test('expandPaths — stops at the cap and says so', async () => {
+    const root = tree('cap', (r) => {
+        for (let i = 0; i < 5; i++) fs.writeFileSync(path.join(r, `${i}.png`), 'x');
+        fs.writeFileSync(path.join(r, 'notes.txt'), 'not an image');
+    });
+    const capped = await expandPaths([root], { limit: 3 });
+    assert.strictEqual(capped.length, 3);
+    assert.strictEqual(capped.truncated, true);
+    const all = await expandPaths([root], { limit: 10 });
+    assert.strictEqual(all.length, 5);
+    assert.strictEqual(all.truncated, false);
+});
+
+test('expandPaths — reports how many it has found as it goes', async () => {
+    const root = tree('progress', (r) => {
+        fs.mkdirSync(path.join(r, 'sub'));
+        for (const name of ['a.png', 'b.jpg', 'sub/c.gif']) fs.writeFileSync(path.join(r, name), 'x');
+    });
+    const counts = [];
+    await expandPaths([root], { onProgress: (n) => counts.push(n) });
+    assert.deepStrictEqual(counts, [1, 2, 3]);
+});
+
+test('a folder still being scanned when Stop is pressed adds nothing', async () => {
+    const root = tree('stopscan', (r) => {
+        for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(r, `${i}.png`), 'x'.repeat(100));
+    });
+    const settings = new Settings(path.join(scratch(), 'stopscan.json'));
+    settings.reset();
+    const queue = new Queue({ settings, binDir: path.join(scratch(), 'nobin') });
+    queue.start = () => {};
+    const adding = queue.add([root]);
+    queue.stop();
+    assert.deepStrictEqual(await adding, { added: 0, truncated: false });
+    assert.strictEqual(queue.jobs.size, 0);
 });

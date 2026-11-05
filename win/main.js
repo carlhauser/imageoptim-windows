@@ -166,7 +166,9 @@ async function confirmDiscard(action) {
 async function clearList() {
     if (!(await confirmDiscard('clear'))) return false;
     queue.clear();
-    send('jobs:reset', queue.snapshot());
+    changedJobs.clear();
+    send('jobs:reset', []);
+    progressMoved();
     return true;
 }
 
@@ -190,6 +192,79 @@ function sendProgress(stats) {
     showTaskbarProgress(stats.batch);
 }
 
+// Changes reach the window in batches. A file sends several changes as its
+// optimizers finish, and adding, stopping or clearing thousands of files
+// sends one per file; one message each, every one serialized at once and
+// every one followed by the totals worked out afresh, kept both processes
+// busy for minutes. Changed files are collected here and go out together, at
+// most ten times a second, with the totals.
+const FLUSH_MS = 100;
+const changedJobs = new Map(); // id -> Job
+let progressChanged = false;
+let flushTimer = null;
+
+function scheduleFlush() {
+    if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_MS);
+}
+
+function flush() {
+    if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+    }
+    if (changedJobs.size) {
+        // A file taken out of the list since it changed must not come back
+        const jobs = [...changedJobs.values()]
+            .filter((job) => queue.jobs.get(job.id) === job)
+            .map((job) => job.toJSON());
+        changedJobs.clear();
+        if (jobs.length) send('jobs:changed', jobs);
+    }
+    if (progressChanged) {
+        progressChanged = false;
+        sendProgress(queue.stats());
+    }
+}
+
+function jobChanged(job) {
+    changedJobs.set(job.id, job);
+    scheduleFlush();
+}
+
+function progressMoved() {
+    progressChanged = true;
+    scheduleFlush();
+}
+
+// A big folder takes a while to look through before any file shows: the
+// window says how many images it has found so far, five times a second.
+let scanTimer = null;
+let latestScan = null;
+
+function reportScan(scan) {
+    latestScan = scan;
+    if (scan.done) {
+        if (scanTimer) clearTimeout(scanTimer);
+        scanTimer = null;
+        send('scan:progress', scan);
+        if (scan.truncated) {
+            messageBox({
+                type: 'info',
+                message: `Only the first ${scan.found.toLocaleString()} images were added`,
+                detail: 'That is as many as one drop can add. Add the rest once these are done, or a folder at a time.',
+                buttons: ['OK'],
+            });
+        }
+        return;
+    }
+    if (!scanTimer) {
+        scanTimer = setTimeout(() => {
+            scanTimer = null;
+            if (latestScan && !latestScan.done) send('scan:progress', latestScan);
+        }, 200);
+    }
+}
+
 // Once a second while files are being optimized, so the time left counts down
 // and each running row's line moves even while no file finishes.
 let heartbeat = null;
@@ -200,8 +275,8 @@ function beat() {
         heartbeat = null;
         return;
     }
-    for (const job of queue.runningJobs()) send('job:change', job.toJSON());
-    sendProgress(queue.stats());
+    for (const job of queue.runningJobs()) jobChanged(job);
+    progressMoved();
 }
 
 function buildMenu() {
@@ -298,12 +373,17 @@ function registerIpc() {
     ipcMain.handle('files:choose', () => openFileDialog());
     ipcMain.handle('folders:choose', () => openFolderDialog());
 
-    ipcMain.handle('queue:stop', () => { queue.stop(); return queue.stats(); });
-    ipcMain.handle('queue:again', () => { queue.again(); return queue.stats(); });
-    ipcMain.handle('queue:clear', async () => { await clearList(); return queue.snapshot(); });
+    // These answer with counts at most: the files' own changes follow as
+    // jobs:changed, in batches
+    ipcMain.handle('queue:stop', () => { queue.stop(); return true; });
+    ipcMain.handle('queue:again', () => { queue.again(); return true; });
+    ipcMain.handle('queue:clear', () => clearList());
     ipcMain.handle('queue:snapshot', () => ({ jobs: queue.snapshot(), stats: queue.stats() }));
 
-    ipcMain.handle('jobs:remove', (event, ids) => { queue.remove(ids || []); return queue.snapshot(); });
+    ipcMain.handle('jobs:remove', (event, ids) => {
+        queue.remove(Array.isArray(ids) ? ids : []);
+        return true;
+    });
     // Ids are the queue's keys, not paths to act on: only a file in the list
     // is ever shown or restored
     ipcMain.handle('job:reveal', (event, id) => {
@@ -453,23 +533,33 @@ app.whenReady().then(() => {
 
     settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
     applyTheme();
-    history = new History(path.join(app.getPath('userData'), 'optimized.jsonl')).load();
-    queue = new Queue({ settings, binDir: resolveBinDir(), history });
-
-    queue.on('job', (snapshot) => send('job:change', snapshot));
-    queue.on('progress', (stats) => {
-        sendProgress(stats);
-        if (queue.isBusy() && !heartbeat) heartbeat = setInterval(beat, 1000);
-    });
-    queue.on('idle', (stats) => send('queue:idle', stats));
-
     registerIpc();
     buildMenu();
+    // The window first: its renderer starts while the list of optimized files
+    // is read below, which can be tens of thousands of lines. Nothing it asks
+    // is answered before this function has returned, by which time the queue
+    // exists.
     createWindow();
+
+    history = new History(path.join(app.getPath('userData'), 'optimized.jsonl'), { batchMs: 1000 }).load();
+    queue = new Queue({ settings, binDir: resolveBinDir(), history });
+
+    queue.on('job', jobChanged);
+    queue.on('progress', () => {
+        progressMoved();
+        if (queue.isBusy() && !heartbeat) heartbeat = setInterval(beat, 1000);
+    });
+    queue.on('idle', (stats) => {
+        flush(); // the last files' rows before the summary
+        send('queue:idle', stats);
+    });
+    queue.on('scan', reportScan);
+
     setupUpdates();
 
-    // Reclaim scratch directories left by a previous run that was killed.
-    sweepTempDirs();
+    // Reclaim scratch directories left by a previous run that was killed,
+    // once the window is up
+    setTimeout(() => { sweepTempDirs(); }, 3000);
 
     // Files opened through Explorer arrive in argv. This used to be read only in
     // the second-instance handler, so the file associations declared in
@@ -491,6 +581,7 @@ app.on('will-quit', () => {
     // Writes are put off while a slider is being dragged; the last one must
     // not be lost on the way out
     if (settings) settings.flush();
+    if (history) history.flush();
 });
 
 app.on('window-all-closed', () => {

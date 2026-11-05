@@ -2,6 +2,7 @@
 
 const api = window.imageoptim;
 
+const tableEl = document.getElementById('file-table');
 const rowsEl = document.getElementById('file-rows');
 const emptyEl = document.getElementById('empty-state');
 const overlayEl = document.getElementById('drop-overlay');
@@ -15,9 +16,6 @@ const stopButton = document.getElementById('stop');
 const updateBannerEl = document.getElementById('update-banner');
 const updateTextEl = document.getElementById('update-text');
 const updateActionsEl = document.getElementById('update-actions');
-
-const rows = new Map(); // job id -> <tr>
-const selection = new Set();
 
 // ------------------------------------------------------------------ formatting
 
@@ -40,80 +38,107 @@ function formatSavings(job) {
     return `${job.percentOptimized.toFixed(1)}%`;
 }
 
-// ------------------------------------------------------------------ rendering
+// ------------------------------------------------------------------ the model
+//
+// Every file the main process has told us about, by id, in the order they
+// arrived. Changes come in batches (main.js flush); each batch updates the
+// model and asks for one redraw on the next frame. Nothing here walks the DOM
+// per file: with tens of thousands of files that is what froze the window.
 
-function renderRow(job) {
-    let tr = rows.get(job.id);
+const jobs = new Map();     // id -> the job as last sent
+let arrival = [];           // ids, first seen first
+let finishCounter = 0;      // orders the Done tab, newest first
+const finishedAt = new Map(); // id -> when it last reached Done or Skipped
+let queueOrder = 'smallest'; // Settings → Options → Queue order
 
-    if (!tr) {
-        tr = document.createElement('tr');
-        tr.dataset.id = job.id;
-        tr.innerHTML = `
-            <td class="col-name col-name-cell"><span class="state" aria-hidden="true"></span><span class="name"></span></td>
-            <td class="col-size size"></td>
-            <td class="col-savings savings"></td>
-            <td class="col-tool tool"></td>`;
-        rows.set(job.id, tr);
-        rowsEl.appendChild(tr);
+const isQueued = (state) => state === 'queued' || state === 'running';
+const viewOf = (state) => (isQueued(state) ? 'queue' : state === 'skipped' ? 'skipped' : 'done');
+
+function applyJobs(batch) {
+    for (const job of batch) {
+        const before = jobs.get(job.id);
+        if (!before) arrival.push(job.id);
+        // Reaching Done (or Skipped) puts a file at the top of that tab
+        if (!before || viewOf(before.state) !== viewOf(job.state)) {
+            if (!isQueued(job.state)) finishedAt.set(job.id, ++finishCounter);
+        }
+        jobs.set(job.id, job);
     }
-
-    const [nameCell, sizeCell, savingsCell, toolCell] = tr.children;
-
-    nameCell.lastElementChild.textContent = job.name;
-    nameCell.title = job.path;
-    // done | unchanged | skipped | running | queued | error | reverted |
-    // stopped, drawn by style.css
-    tr.dataset.state = job.state === 'done' && !job.percentOptimized ? 'unchanged' : job.state;
-    sizeCell.textContent = formatBytes(job.bestSize);
-    savingsCell.textContent = formatSavings(job);
-    savingsCell.title = job.state === 'error' ? (job.error || 'Error') : (job.state === 'done' && job.noteDetail) || '';
-    savingsCell.classList.toggle('none', !job.percentOptimized && job.state !== 'error');
-    savingsCell.classList.toggle('error', job.state === 'error');
-    toolCell.textContent = job.bestTool || '';
-
-    tr.classList.toggle('running', job.state === 'running');
-    tr.classList.toggle('selected', selection.has(job.id));
-    tr.style.setProperty('--progress', `${Math.round((job.progress || 0) * 100)}%`);
-
-    updateViews();
+    structureChanged();
 }
 
-function removeRow(id) {
-    const tr = rows.get(id);
-    if (tr) tr.remove();
-    rows.delete(id);
-    selection.delete(id);
-    updateViews();
+function removeJobs(ids) {
+    const gone = new Set(ids);
+    for (const id of gone) {
+        jobs.delete(id);
+        finishedAt.delete(id);
+        selection.delete(id);
+    }
+    arrival = arrival.filter((id) => !gone.has(id));
+    structureChanged();
 }
 
-// --------------------------------------------------------- queue / done views
+function resetJobs(all) {
+    jobs.clear();
+    finishedAt.clear();
+    arrival = [];
+    selection.clear();
+    anchorId = null;
+    activeId = null;
+    applyJobs(all);
+}
 
-// Queue holds what is waiting or being optimized; Done everything finished,
-// whether optimized, already optimal, failed, reverted or stopped; Skipped the
-// files an earlier run had already optimized, which were left alone. Which
-// rows show is decided by style.css from the pane's data-view and each row's
-// data-state; this keeps the counts and the empty-state text right.
+// ------------------------------------------------------------------ the views
+//
+// Queue holds what is waiting or being optimized - running files first, then
+// in the order they will run; Done everything finished, whether optimized,
+// already optimal, failed, reverted or stopped, newest first; Skipped the
+// files an earlier run had already optimized, which were left alone.
+
 const listPaneEl = document.querySelector('.list-pane');
 const viewTabs = [...document.querySelectorAll('.list-tabs [role="tab"]')];
 const emptyTitleEl = emptyEl.querySelector('.empty-title');
 const emptyHintEl = emptyEl.querySelector('.empty-hint');
 const emptyText = { title: emptyTitleEl.textContent, hint: emptyHintEl.innerHTML };
-let lastQueued = 0;
-let lastDone = 0;
-let lastSkipped = 0;
+let views = { queue: [], done: [], skipped: [] };
+let viewsStale = true;
+let lastCounts = { queue: 0, done: 0, skipped: 0 };
 let keepOriginals = false; // Settings → Options → Keep originals
 
 const keptHint = 'PNG, JPEG, GIF, SVG, WebP and AVIF files, or whole folders.<br>'
     + 'Files are optimized in place; each original is kept in an “ImageOptim originals” folder beside it.';
 
-const isQueued = (state) => state === 'queued' || state === 'running';
+function currentView() {
+    return listPaneEl.dataset.view;
+}
+
+function rebuildViews() {
+    const next = { queue: [], done: [], skipped: [] };
+    const running = [];
+    for (const id of arrival) {
+        const job = jobs.get(id);
+        if (job.state === 'running') running.push(id);
+        else next[viewOf(job.state)].push(id);
+    }
+    // In the order the queue takes them (lib/queue.js sortPending)
+    const size = (id) => jobs.get(id).originalSize;
+    if (queueOrder === 'smallest') next.queue.sort((a, b) => size(a) - size(b));
+    else if (queueOrder === 'largest') next.queue.sort((a, b) => size(b) - size(a));
+    next.queue = running.concat(next.queue);
+    const newest = (a, b) => (finishedAt.get(b) || 0) - (finishedAt.get(a) || 0);
+    next.done.sort(newest);
+    views = next;
+    viewsStale = false;
+}
 
 function showView(view, focus = false) {
-    if (listPaneEl.dataset.view !== view) {
+    if (currentView() !== view) {
         // Rows hidden by the other view must not stay selected, or Delete and
         // Ctrl+Z would act on files that are out of sight.
         selection.clear();
-        for (const tr of rows.values()) tr.classList.remove('selected');
+        anchorId = null;
+        activeId = null;
+        tableEl.scrollTop = 0;
     }
     listPaneEl.dataset.view = view;
     for (const tab of viewTabs) {
@@ -122,41 +147,37 @@ function showView(view, focus = false) {
         tab.tabIndex = selected ? 0 : -1;
         if (selected && focus) tab.focus();
     }
-    updateViews();
+    scheduleRender();
 }
 
-function updateViews() {
-    let queued = 0;
-    let skipped = 0;
-    for (const tr of rows.values()) {
-        if (isQueued(tr.dataset.state)) queued += 1;
-        else if (tr.dataset.state === 'skipped') skipped += 1;
+// Follow the work: new files bring the queue to the front, and when the last
+// one finishes the results take its place - under Done, or under Skipped if
+// every file turned out to be optimized already. Files added that all go
+// straight to Skipped show there too, rather than leaving an empty Queue in
+// front.
+function followTheWork(counts) {
+    const last = lastCounts;
+    lastCounts = counts;
+    if (counts.queue > 0 && last.queue === 0) return 'queue';
+    if (counts.queue === 0 && last.queue > 0) {
+        return counts.done > 0 ? 'done' : counts.skipped > 0 ? 'skipped' : null;
     }
-    const done = rows.size - queued - skipped;
-    document.getElementById('count-queue').textContent = queued;
-    document.getElementById('count-done').textContent = done;
-    document.getElementById('count-skipped').textContent = skipped;
+    if (counts.queue === 0 && counts.skipped > last.skipped && counts.done <= last.done) return 'skipped';
+    return null;
+}
 
-    // Follow the work: new files bring the queue to the front, and when the
-    // last one finishes the results take its place - under Done, or under
-    // Skipped if every file turned out to be optimized already. Files added
-    // that all go straight to Skipped show there too, rather than leaving an
-    // empty Queue in front.
-    const view = listPaneEl.dataset.view;
-    const doneGrew = done > lastDone;
-    const skippedGrew = skipped > lastSkipped;
-    lastDone = done;
-    lastSkipped = skipped;
-    let follow = null;
-    if (queued > 0 && lastQueued === 0) follow = 'queue';
-    else if (queued === 0 && lastQueued > 0) follow = done > 0 ? 'done' : skipped > 0 ? 'skipped' : null;
-    else if (queued === 0 && skippedGrew && !doneGrew) follow = 'skipped';
-    lastQueued = queued;
-    if (follow && follow !== view) { showView(follow); return; }
+function updateCountsAndEmptyState() {
+    const counts = { queue: views.queue.length, done: views.done.length, skipped: views.skipped.length };
+    document.getElementById('count-queue').textContent = counts.queue;
+    document.getElementById('count-done').textContent = counts.done;
+    document.getElementById('count-skipped').textContent = counts.skipped;
 
-    const shown = { queue: queued, done, skipped }[view];
-    emptyEl.classList.toggle('hidden', shown > 0);
-    if (rows.size === 0) {
+    const follow = followTheWork(counts);
+    if (follow && follow !== currentView()) showView(follow);
+
+    const view = currentView();
+    emptyEl.classList.toggle('hidden', counts[view] > 0);
+    if (jobs.size === 0) {
         emptyTitleEl.textContent = emptyText.title;
         emptyHintEl.innerHTML = keepOriginals ? keptHint : emptyText.hint;
     } else if (view === 'queue') {
@@ -182,13 +203,261 @@ for (const tab of viewTabs) {
     });
 }
 
-function renderAll(jobs) {
-    const keep = new Set(jobs.map((job) => job.id));
-    for (const id of [...rows.keys()]) {
-        if (!keep.has(id)) removeRow(id);
-    }
-    jobs.forEach(renderRow);
+// -------------------------------------------------------------- the list
+//
+// Only the rows in sight exist: a few dozen <tr>, reused as the list scrolls,
+// between two spacer rows that stand in for the rest. Each row is a fixed
+// 36 px (style.css td), which is what makes the arithmetic possible.
+
+const ROW_HEIGHT = 36;
+const OVERSCAN = 8;
+const topSpacer = document.createElement('tr');
+const bottomSpacer = document.createElement('tr');
+for (const spacer of [topSpacer, bottomSpacer]) {
+    spacer.className = 'spacer';
+    spacer.setAttribute('aria-hidden', 'true');
 }
+const pool = []; // <tr> elements, reused
+let rowsInUse = 0;
+rowsEl.append(topSpacer, bottomSpacer);
+
+// Rows stay where they are and only their contents change, so the one under
+// the mouse keeps its hover and a double-click is not lost to a redraw;
+// rows are only added or taken away at the end.
+function setRowCount(count) {
+    while (pool.length < count) pool.push(makeRow());
+    while (rowsInUse < count) rowsEl.insertBefore(pool[rowsInUse++], bottomSpacer);
+    while (rowsInUse > count) pool[--rowsInUse].remove();
+}
+
+// On the next frame - or, in a window that is minimized or covered, where
+// Chromium stops sending frames, shortly after: the counts, the empty-state
+// text and what a screen reader finds must not freeze until it is shown.
+let renderQueued = false;
+function scheduleRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    const run = () => {
+        if (!renderQueued) return;
+        renderQueued = false;
+        render();
+    };
+    requestAnimationFrame(run);
+    setTimeout(run, 250);
+}
+
+function structureChanged() {
+    viewsStale = true;
+    scheduleRender();
+}
+
+function makeRow() {
+    const tr = document.createElement('tr');
+    tr.setAttribute('role', 'row');
+    tr.innerHTML = `
+        <td class="col-name col-name-cell" role="gridcell"><span class="state" role="img"></span><span class="name"></span></td>
+        <td class="col-size size" role="gridcell"></td>
+        <td class="col-savings savings" role="gridcell"></td>
+        <td class="col-tool tool" role="gridcell"></td>`;
+    return tr;
+}
+
+const STATE_NAMES = {
+    done: 'Optimized', unchanged: 'Already optimal', skipped: 'Skipped', queued: 'Waiting',
+    running: 'Optimizing', error: 'Failed', reverted: 'Reverted', stopped: 'Stopped',
+};
+
+function fillRow(tr, job, index) {
+    tr.dataset.id = job.id;
+    tr.id = `row-${index}`;
+    tr.setAttribute('aria-rowindex', String(index + 2)); // the header is row 1
+    const [nameCell, sizeCell, savingsCell, toolCell] = tr.children;
+
+    // done | unchanged | skipped | running | queued | error | reverted |
+    // stopped, drawn by style.css
+    const state = job.state === 'done' && !job.percentOptimized ? 'unchanged' : job.state;
+    tr.dataset.state = state;
+    nameCell.firstElementChild.setAttribute('aria-label', STATE_NAMES[state] || state);
+    nameCell.lastElementChild.textContent = job.name;
+    nameCell.title = job.path;
+    sizeCell.textContent = formatBytes(job.bestSize);
+    savingsCell.textContent = formatSavings(job);
+    savingsCell.title = job.state === 'error' ? (job.error || 'Error') : (job.state === 'done' && job.noteDetail) || '';
+    savingsCell.classList.toggle('none', !job.percentOptimized && job.state !== 'error');
+    savingsCell.classList.toggle('error', job.state === 'error');
+    toolCell.textContent = job.bestTool || '';
+
+    const selected = selection.has(job.id);
+    tr.classList.toggle('running', job.state === 'running');
+    tr.classList.toggle('selected', selected);
+    tr.classList.toggle('active', job.id === activeId);
+    tr.setAttribute('aria-selected', String(selected));
+    // Only a running row draws its line; a stale value on a reused row
+    // would otherwise animate from wherever the last file left off
+    if (job.state === 'running') tr.style.setProperty('--progress', `${Math.round((job.progress || 0) * 100)}%`);
+    else tr.style.removeProperty('--progress');
+}
+
+// Where the first row starts inside the scrolling table: below the sticky
+// header and the body's top padding
+function rowsOffset() {
+    return rowsEl.offsetTop + 4;
+}
+
+function render() {
+    if (viewsStale) {
+        rebuildViews();
+        updateCountsAndEmptyState();
+    }
+    const ids = views[currentView()];
+    tableEl.setAttribute('aria-rowcount', String(ids.length + 1));
+
+    const top = Math.max(0, tableEl.scrollTop - rowsOffset());
+    const first = Math.max(0, Math.floor(top / ROW_HEIGHT) - OVERSCAN);
+    const visible = Math.ceil(tableEl.clientHeight / ROW_HEIGHT) + 2 * OVERSCAN;
+    const last = Math.min(ids.length, first + visible);
+
+    setRowCount(Math.max(0, last - first));
+    for (let i = first; i < last; i++) fillRow(pool[i - first], jobs.get(ids[i]), i);
+
+    topSpacer.style.height = `${first * ROW_HEIGHT}px`;
+    bottomSpacer.style.height = `${(ids.length - last) * ROW_HEIGHT}px`;
+
+    const activeIndex = activeId ? ids.indexOf(activeId) : -1;
+    if (activeIndex >= first && activeIndex < last) {
+        tableEl.setAttribute('aria-activedescendant', `row-${activeIndex}`);
+    } else {
+        tableEl.removeAttribute('aria-activedescendant');
+    }
+}
+
+tableEl.addEventListener('scroll', scheduleRender, { passive: true });
+new ResizeObserver(scheduleRender).observe(tableEl);
+
+// ---------------------------------------------------------------- selection
+//
+// The rows that are selected, the one keyboard focus is on (active), and the
+// one a Shift range starts from (anchor), all by id, so they survive the
+// rows being reused and the list reordering under them.
+
+const selection = new Set();
+let activeId = null;
+let anchorId = null;
+
+function selectRange(ids, fromId, toId) {
+    const a = ids.indexOf(fromId);
+    const b = ids.indexOf(toId);
+    if (a < 0 || b < 0) return;
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) selection.add(ids[i]);
+}
+
+function scrollIntoView(index) {
+    const rowTop = rowsOffset() + index * ROW_HEIGHT;
+    const header = rowsEl.offsetTop;
+    if (rowTop - header < tableEl.scrollTop) {
+        tableEl.scrollTop = rowTop - header;
+    } else if (rowTop + ROW_HEIGHT > tableEl.scrollTop + tableEl.clientHeight) {
+        tableEl.scrollTop = rowTop + ROW_HEIGHT - tableEl.clientHeight;
+    }
+}
+
+rowsEl.addEventListener('mousedown', (event) => {
+    // Shift+click extends a range: the browser's own text selection would
+    // otherwise highlight half the window
+    if (event.shiftKey) event.preventDefault();
+});
+
+rowsEl.addEventListener('click', (event) => {
+    const tr = event.target.closest('tr[data-id]');
+    if (!tr) return;
+    const id = tr.dataset.id;
+    const ids = views[currentView()];
+
+    if (event.shiftKey && anchorId) {
+        if (!event.ctrlKey) selection.clear();
+        selectRange(ids, anchorId, id);
+    } else if (event.ctrlKey || event.metaKey) {
+        if (selection.has(id)) selection.delete(id);
+        else selection.add(id);
+        anchorId = id;
+    } else {
+        selection.clear();
+        selection.add(id);
+        anchorId = id;
+    }
+    activeId = id;
+    tableEl.focus({ preventScroll: true });
+    scheduleRender();
+});
+
+rowsEl.addEventListener('dblclick', (event) => {
+    const tr = event.target.closest('tr[data-id]');
+    if (tr) api.reveal(tr.dataset.id);
+});
+
+// The grid's own keys, while it has focus
+tableEl.addEventListener('keydown', (event) => {
+    const ids = views[currentView()];
+    if (!ids.length) return;
+    const page = Math.max(1, Math.floor(tableEl.clientHeight / ROW_HEIGHT) - 1);
+    const at = activeId ? ids.indexOf(activeId) : -1;
+    const moves = {
+        ArrowDown: at + 1, ArrowUp: at - 1, PageDown: at + page, PageUp: at - page,
+        Home: 0, End: ids.length - 1,
+    };
+    const ctrl = event.ctrlKey || event.metaKey;
+
+    if (event.key in moves) {
+        event.preventDefault();
+        const index = Math.max(0, Math.min(ids.length - 1, at < 0 ? 0 : moves[event.key]));
+        activeId = ids[index];
+        if (event.shiftKey) {
+            if (!anchorId) anchorId = ids[Math.max(0, at)];
+            selection.clear();
+            selectRange(ids, anchorId, activeId);
+        } else if (!ctrl) {
+            selection.clear();
+            selection.add(activeId);
+            anchorId = activeId;
+        }
+        scrollIntoView(index);
+        scheduleRender();
+    } else if (event.key === ' ' && activeId) {
+        event.preventDefault();
+        if (ctrl && selection.has(activeId)) selection.delete(activeId);
+        else selection.add(activeId);
+        anchorId = activeId;
+        scheduleRender();
+    } else if (event.key === 'a' && ctrl) {
+        event.preventDefault();
+        for (const id of ids) selection.add(id);
+        scheduleRender();
+    } else if (event.key === 'Enter' && activeId) {
+        event.preventDefault();
+        api.reveal(activeId);
+    }
+});
+
+// Delete and Ctrl+Z act on the selected files - but only when the keys are
+// not meant for a control: Backspace in a dropdown or on a button used to
+// take the selected rows out of the list.
+window.addEventListener('keydown', (event) => {
+    if (event.target.closest('input, output, select, textarea, button, [role="tab"], #settings-panel')) return;
+    if (!selection.size) return;
+
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault();
+        const ids = [...selection];
+        api.removeJobs(ids).then(() => removeJobs(ids));
+    }
+
+    if (event.key === 'z' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        for (const id of selection) api.revert(id);
+    }
+});
+
+// ------------------------------------------------------------------ the totals
 
 // The bar along the top of the status bar, and the time left beside it.
 // lib/eta.js decides the numbers and the wording.
@@ -200,8 +469,24 @@ function renderBatch(batch) {
     batchProgressEl.setAttribute('aria-valuetext', batch.ariaText);
 }
 
+// While a dropped folder is being looked through, before its files show
+let scanning = null;
+
+function renderScan(scan) {
+    scanning = scan.done ? null : scan;
+    if (scanning) statusFilesEl.textContent = `Looking for images… ${scanning.found.toLocaleString()} found`;
+    else if (lastStats) renderStats(lastStats);
+}
+
+let lastStats = null;
+
 function renderStats(stats) {
+    lastStats = stats;
     renderBatch(stats.batch);
+    if (scanning) {
+        stopButton.disabled = stats.busy === 0;
+        return;
+    }
     if (!stats.files) {
         statusFilesEl.textContent = 'No files';
         statusSavingsEl.textContent = '';
@@ -227,25 +512,22 @@ function renderStats(stats) {
 
 // -------------------------------------------------------------------- actions
 
-async function addPaths(paths) {
-    if (!paths.length) return;
-    await api.addPaths(paths);
-    const { jobs, stats } = await api.snapshot();
-    renderAll(jobs);
-    renderStats(stats);
+// The files themselves arrive through onJobsChanged as the queue takes them
+function addPaths(paths) {
+    if (paths.length) api.addPaths(paths);
 }
 
 async function refresh() {
-    const { jobs, stats } = await api.snapshot();
-    renderAll(jobs);
+    const { jobs: all, stats } = await api.snapshot();
+    resetJobs(all);
     renderStats(stats);
 }
 
-document.getElementById('add-files').addEventListener('click', () => api.chooseFiles().then(refresh));
-document.getElementById('add-folder').addEventListener('click', () => api.chooseFolders().then(refresh));
-document.getElementById('again').addEventListener('click', () => api.again().then(refresh));
-document.getElementById('stop').addEventListener('click', () => api.stop().then(refresh));
-document.getElementById('clear').addEventListener('click', () => api.clear().then(refresh));
+document.getElementById('add-files').addEventListener('click', () => api.chooseFiles());
+document.getElementById('add-folder').addEventListener('click', () => api.chooseFolders());
+document.getElementById('again').addEventListener('click', () => api.again());
+document.getElementById('stop').addEventListener('click', () => api.stop());
+document.getElementById('clear').addEventListener('click', () => api.clear());
 
 document.getElementById('toggle-settings').addEventListener('click', (event) => {
     const open = settingsEl.hidden;
@@ -310,39 +592,6 @@ window.addEventListener('drop', (event) => {
     addPaths(paths);
 });
 
-// -------------------------------------------------------------------- the list
-
-rowsEl.addEventListener('click', (event) => {
-    const tr = event.target.closest('tr');
-    if (!tr) return;
-
-    if (!event.ctrlKey && !event.metaKey && !event.shiftKey) selection.clear();
-    if (selection.has(tr.dataset.id)) selection.delete(tr.dataset.id);
-    else selection.add(tr.dataset.id);
-
-    for (const [id, row] of rows) row.classList.toggle('selected', selection.has(id));
-});
-
-rowsEl.addEventListener('dblclick', (event) => {
-    const tr = event.target.closest('tr');
-    if (tr) api.reveal(tr.dataset.id);
-});
-
-window.addEventListener('keydown', (event) => {
-    if (event.target.matches('input, output')) return;
-
-    if ((event.key === 'Delete' || event.key === 'Backspace') && selection.size) {
-        event.preventDefault();
-        api.removeJobs([...selection]).then(refresh);
-        selection.clear();
-    }
-
-    if (event.key === 'z' && (event.ctrlKey || event.metaKey) && selection.size) {
-        event.preventDefault();
-        Promise.all([...selection].map((id) => api.revert(id))).then(refresh);
-    }
-});
-
 // -------------------------------------------------------------------- settings
 
 // Saturation 100% is this chroma; past it most hues leave the sRGB gamut at
@@ -369,7 +618,11 @@ function applySettings(values) {
     applyAccent(values);
     if ('KeepOriginals' in values) {
         keepOriginals = Boolean(values.KeepOriginals);
-        updateViews();
+        structureChanged();
+    }
+    if ('QueueOrder' in values && values.QueueOrder !== queueOrder) {
+        queueOrder = values.QueueOrder;
+        structureChanged();
     }
     for (const input of settingsEl.querySelectorAll('[data-setting]')) {
         const key = input.dataset.setting;
@@ -473,13 +726,14 @@ updateActionsEl.addEventListener('click', (event) => {
 
 // ----------------------------------------------------------------------- init
 
-api.onJobChange(renderRow);
+api.onJobsChanged(applyJobs);
 api.onProgress(renderStats);
+api.onScan(renderScan);
 api.onIdle((stats) => {
     renderStats(stats);
     if (!settingsEl.hidden) api.historyStats().then(renderHistory);
 });
-api.onReset(renderAll);
+api.onReset(resetJobs);
 api.onUpdateState(renderUpdate);
 
 (async function init() {

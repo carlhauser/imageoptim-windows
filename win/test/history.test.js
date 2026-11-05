@@ -321,3 +321,29 @@ test('stripping WebP and AVIF metadata is part of what a run did', () => {
     assert.strictEqual(profileFor('webp', DEFAULTS).strip, 1);
     assert.strictEqual(profileFor('avif', { ...DEFAULTS, WebPAvifStripMetadata: false }).strip, 0);
 });
+
+// ------------------------------------------------------------ batched writes
+
+test('with batchMs, records are written together on flush, not one by one', () => {
+    const file = storePath();
+    const h = new History(file, { batchMs: 60000 });
+    h.record({ hash: 'a'.repeat(32), type: 'png', profile: profile() });
+    h.record({ hash: 'b'.repeat(32), type: 'png', profile: profile() });
+    assert.ok(!fs.existsSync(file), 'nothing written yet');
+    assert.ok(h.findByHash('a'.repeat(32)), 'but known at once');
+    h.flush();
+    assert.strictEqual(new History(file).load().count(), 2);
+});
+
+test('compaction keeps a few paths per file, so it does not run after every record', () => {
+    const file = storePath();
+    let t = 0;
+    const h = new History(file, { cap: 2, now: () => ++t });
+    // One content at many paths: before, every path was kept, the store stayed
+    // over its cap and was rewritten on each record
+    for (let i = 0; i < 20; i++) h.record({ hash: 'c'.repeat(32), key: `path-${i}`, type: 'png', profile: profile() });
+    assert.ok(h.lines <= 2 * 1.25 + 4, `${h.lines} lines`);
+    const reloaded = new History(file).load();
+    assert.ok(reloaded.findByStat('path-19'), 'the newest path is kept');
+    assert.strictEqual(reloaded.findByStat('path-0'), null, 'the oldest is not');
+});

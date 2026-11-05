@@ -40,8 +40,10 @@ contextBridge.exposeInMainWorld('imageoptim', {
     updateAction: (id) => ipcRenderer.invoke('update:action', id),
     onUpdateState: (handler) => ipcRenderer.on('update:state', (event, state) => handler(state)),
 
-    onJobChange: (handler) => ipcRenderer.on('job:change', (event, job) => handler(job)),
+    // Changed files arrive together, at most ten times a second (main.js flush)
+    onJobsChanged: (handler) => ipcRenderer.on('jobs:changed', (event, jobs) => handler(jobs)),
     onProgress: (handler) => ipcRenderer.on('queue:progress', (event, stats) => handler(stats)),
+    onScan: (handler) => ipcRenderer.on('scan:progress', (event, scan) => handler(scan)),
     onIdle: (handler) => ipcRenderer.on('queue:idle', (event, stats) => handler(stats)),
     onReset: (handler) => ipcRenderer.on('jobs:reset', (event, jobs) => handler(jobs)),
 });

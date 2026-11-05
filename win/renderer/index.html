@@ -57,13 +57,15 @@
     <main>
         <div class="list-pane" data-view="queue">
             <div class="list-body">
-                <table id="file-table">
+                <!-- A grid: one tab stop, the arrow keys move between rows, and
+                     only the rows in sight exist (app.js). -->
+                <table id="file-table" role="grid" aria-label="Files" aria-multiselectable="true" tabindex="0">
                     <thead>
-                        <tr>
-                            <th class="col-name">Name</th>
-                            <th class="col-size">Size</th>
-                            <th class="col-savings">Savings</th>
-                            <th class="col-tool">Best tool</th>
+                        <tr role="row" aria-rowindex="1">
+                            <th class="col-name" role="columnheader">Name</th>
+                            <th class="col-size" role="columnheader">Size</th>
+                            <th class="col-savings" role="columnheader">Savings</th>
+                            <th class="col-tool" role="columnheader">Best tool</th>
                         </tr>
                     </thead>
                     <tbody id="file-rows"></tbody>
