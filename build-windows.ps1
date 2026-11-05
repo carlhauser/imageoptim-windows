@@ -885,6 +885,8 @@ cmake --build .build-win/libavif --parallel $Jobs --target avifenc avifdec
     ) | Out-Null
 }
 
+# --locked: exactly the crates each Cargo.lock names. Without it every build took
+# whatever was newest, and ran those crates' build scripts in the build job.
 function Build-CargoTool {
     param(
         [Parameter(Mandatory)] [string] $Tool,
@@ -893,7 +895,7 @@ function Build-CargoTool {
     )
 
     $code = Invoke-Step -Name "$Tool (cargo)" -Script @"
-cargo build --release --target x86_64-pc-windows-gnu $ExtraArgs
+cargo build --locked --release --target x86_64-pc-windows-gnu $ExtraArgs
 "@ -WorkingDirectory (Join-Path $RepoRoot $Directory)
     if ($code -ne 0) { $Results[$Tool] = 'FAILED'; return }
 
