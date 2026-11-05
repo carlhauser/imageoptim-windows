@@ -584,6 +584,30 @@ function unlinkQuietly(filePath) {
     }
 }
 
+// How long a tool may run on this input before it counts as hung. Generous on
+// purpose: a run stopped early is a saving lost, while the point is only that
+// a tool which never returns cannot hold its slot, and the batch, for ever.
+const MB = 1024 * 1024;
+
+function defaultTimeoutMs(byteSize) {
+    return 60000 + 30000 * (byteSize / MB);
+}
+
+zopflipng.timeoutMs = (ctx) => {
+    // Twice the longest --timelimit run() can pass (the alternative strategy
+    // gets 1.4 times the formula), plus time to read and write the file
+    const longest = (8 + ctx.level * 13) * 1.4 * 1000;
+    return Math.max(defaultTimeoutMs(ctx.input.byteSize), 2 * longest + 10000);
+};
+// Minutes per megapixel; a JPEG holds a few megapixels per megabyte
+guetzli.timeoutMs = (ctx) => Math.max(defaultTimeoutMs(ctx.input.byteSize), 180000 * (ctx.input.byteSize / MB));
+// Decode and encode, at the slower speeds of the higher efforts
+avifenc.timeoutMs = (ctx) => Math.max(defaultTimeoutMs(ctx.input.byteSize), 120000 + 120000 * (ctx.input.byteSize / MB));
+
+function timeoutMs(tool, ctx) {
+    return Math.round(tool.timeoutMs ? tool.timeoutMs(ctx) : defaultTimeoutMs(ctx.input.byteSize));
+}
+
 const ALL = [
     pngquant, pngcrush, oxipng, advpng, zopflipng,
     guetzli, jpegoptim, jpegtran,
@@ -596,6 +620,7 @@ module.exports = {
     ALL,
     byId: (id) => ALL.find((t) => t.id === id),
     statSize,
+    timeoutMs,
     parseAvifdecSummary,
     webpLosslessEffort,
     avifSpeed,

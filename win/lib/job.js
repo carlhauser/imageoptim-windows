@@ -8,6 +8,7 @@ const { EventEmitter } = require('events');
 const tools = require('./tools');
 const { hashFile, statKey, profileFor, satisfies } = require('./history');
 const { keepOriginal, removeIfEmpty, sameContent } = require('./originals');
+const { looksComplete, hasRoomFor } = require('./validate');
 const {
     detectType, inspect, typeFromExtension, isSmall, HEADER_BYTES, PNG, JPEG, GIF, SVG, WEBP, AVIF,
 } = require('./filetype');
@@ -181,6 +182,7 @@ class Job extends EventEmitter {
         this.toolsTotal = 0;
         this.toolsDone = 0;
         this.shownProgress = 0;
+        this.problems = [];        // { tool, problem } from the last run
     }
 
     // How far along the row's progress line is. Counting finished optimizers
@@ -278,6 +280,7 @@ class Job extends EventEmitter {
             noteDetail: this.note ? this.note.detail : null,
             progress: this.progressFraction(),
             canRevert: this.canRevert,
+            problems: this.problems.length ? this.problems.slice() : null,
         };
     }
 
@@ -440,14 +443,39 @@ class Job extends EventEmitter {
             helpers: resolved.helpers,
         };
 
+        // A tool that hangs would hold its slot for good, and the batch would
+        // never end. The clock starts once the tool has a slot, not while it
+        // waits for one, and the tool is stopped the way Stop stops it.
+        let timeout = null;
+        const execute = () => {
+            if (signal.aborted) return null;
+            timeout = AbortSignal.timeout(tools.timeoutMs(tool, ctx));
+            ctx.signal = AbortSignal.any([signal, timeout]);
+            return tool.run(ctx);
+        };
+
         let result = null;
         try {
             // One slot per running optimizer, shared with every other file
-            result = this.semaphore
-                ? await this.semaphore.run(() => tool.run(ctx))
-                : await tool.run(ctx);
+            result = this.semaphore ? await this.semaphore.run(execute) : await execute();
         } catch (err) {
             console.warn(`${tool.id} failed:`, err.message);
+            this.noteProblem(tool, 'failed');
+        }
+
+        // Nothing written is nothing gained, not damage: svgcleaner, for one,
+        // exits 0 with empty output when its result would be bigger
+        if (result && !result.size) result = null;
+
+        if (timeout && timeout.aborted && !signal.aborted) {
+            console.warn(`${tool.id} timed out`);
+            this.noteProblem(tool, 'timed out');
+            result = null;
+        } else if (result && !signal.aborted && !looksComplete(this.type, temp)) {
+            // Exited 0 with a smaller file that is not a whole image
+            console.warn(`${tool.id} produced an incomplete file`);
+            this.noteProblem(tool, 'produced a damaged file');
+            result = null;
         }
 
         this.toolsDone += 1;
@@ -458,6 +486,12 @@ class Job extends EventEmitter {
             return null;
         }
         return { temp, ...result };
+    }
+
+    // An optimizer that crashed, hung or wrote a broken file. The file is
+    // still finished with the others, so this is shown, not fatal.
+    noteProblem(tool, problem) {
+        this.problems.push({ tool: tool.label, problem });
     }
 
     async run(settings, signal) {
@@ -475,6 +509,7 @@ class Job extends EventEmitter {
 
     async doRun(settings, signal) {
         this.shownProgress = 0;
+        this.problems = [];
         this.setState('running');
 
         let header;
@@ -537,6 +572,13 @@ class Job extends EventEmitter {
             fs.accessSync(this.filePath, fs.constants.W_OK);
         } catch (err) {
             this.setState('error', 'Optimized file could not be saved');
+            return;
+        }
+
+        // Each optimizer writes a candidate of up to this size, and a full
+        // temp drive makes them all fail as though nothing could be gained
+        if (!hasRoomFor(tempDir(), currentSize * 4)) {
+            this.setState('error', 'Not enough free disk space for the temporary files');
             return;
         }
 
@@ -677,8 +719,8 @@ class Job extends EventEmitter {
             // Some network and FUSE volumes refuse a rename over an open file,
             // and a folder can refuse new files while the file itself is
             // writable. A direct copy is not atomic, so it is only tried with a
-            // backup of the original in hand.
-            if (!this.backupPath) throw err;
+            // backup of the original in hand, and never when the disk is full.
+            if (!this.backupPath || err.code === 'ENOSPC') throw err;
         }
 
         if (source === this.backupPath) {
@@ -757,6 +799,10 @@ class Job extends EventEmitter {
     // can be reverted from the UI.
     save(settings) {
         this.assertUnchangedSinceStart();
+        // The result is staged beside the original before it replaces it
+        if (!hasRoomFor(path.dirname(this.filePath), this.bestSize)) {
+            throw new Error('there is not enough free disk space beside it');
+        }
 
         if (!this.backupPath) {
             // A file this app wrote itself has no original of its own to keep:

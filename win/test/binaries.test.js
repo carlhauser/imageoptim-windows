@@ -18,6 +18,7 @@ const path = require('path');
 const { makeResolver } = require('../lib/queue');
 const { inspect, HEADER_BYTES } = require('../lib/filetype');
 const { DEFAULTS } = require('../lib/settings');
+const { looksComplete } = require('../lib/validate');
 const { scratch, cleanupScratch, tools, run } = require('./helpers');
 
 const BIN = process.env.IMAGEOPTIM_BIN;
@@ -130,6 +131,13 @@ for (const tool of tools.ALL) {
         if (type === 'webp' || type === 'avif') {
             assert.ok(outcome && outcome.size > 0 && outcome.size < fs.statSync(input).size,
                 `${tool.id} produced no smaller file`);
+        }
+
+        // Whatever a real tool writes must pass the check that stands between
+        // it and the user's file, or that check would throw away good results
+        // (svgcleaner writes nothing at all when it would make the file bigger)
+        if (outcome && outcome.size) {
+            assert.ok(looksComplete(type, temp), `${tool.id}'s output failed lib/validate.js`);
         }
     });
 }

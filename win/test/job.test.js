@@ -272,3 +272,80 @@ test('if the original cannot be put back either, its backup is saved beside it',
     job.cleanup();
     assert.ok(fs.existsSync(rescued), 'cleanup never removes the rescued copy');
 });
+
+// ------------------------------------------ an optimizer that misbehaves
+
+// A job on a real PNG, ready to run single optimizers through runTool
+function toolJob(name) {
+    const file = path.join(scratch(), name);
+    fs.copyFileSync(path.resolve(__dirname, '..', '..', 'libpng', 'pngbar.png'), file);
+    const job = new Job(file, { resolveTool: () => ({ exe: '/fake/tool' }) });
+    job.type = 'png';
+    job.bestSize = job.originalSize = fs.statSync(file).size;
+    return { job, file };
+}
+
+test('an output that is not a whole image is thrown away, and said so', async () => {
+    const { job, file } = toolJob('damaged.png');
+    const truncating = {
+        id: 'truncating', label: 'Truncating',
+        run: async (ctx) => {
+            fs.writeFileSync(ctx.temp, fs.readFileSync(file).subarray(0, 200));
+            return { size: 200, label: 'Truncating' };
+        },
+    };
+    const result = await job.runTool({ tool: truncating, level: 4 }, DEFAULTS, new AbortController().signal);
+    assert.strictEqual(result, null);
+    assert.deepStrictEqual(job.problems, [{ tool: 'Truncating', problem: 'produced a damaged file' }]);
+    assert.deepStrictEqual(job.toJSON().problems, job.problems);
+});
+
+test('a whole image from a tool is kept', async () => {
+    const { job, file } = toolJob('whole.png');
+    const copying = {
+        id: 'copying', label: 'Copying',
+        run: async (ctx) => {
+            fs.copyFileSync(file, ctx.temp);
+            return { size: fs.statSync(ctx.temp).size - 1, label: 'Copying' };
+        },
+    };
+    const result = await job.runTool({ tool: copying, level: 4 }, DEFAULTS, new AbortController().signal);
+    assert.ok(result && fs.existsSync(result.temp));
+    assert.deepStrictEqual(job.problems, []);
+    assert.strictEqual(job.toJSON().problems, null);
+});
+
+test('a tool that hangs is stopped at its time limit, not held for ever', async () => {
+    const { job } = toolJob('hang.png');
+    let stopped = false;
+    const hanging = {
+        id: 'hanging', label: 'Hanging',
+        timeoutMs: () => 50,
+        run: (ctx) => new Promise((resolve) => {
+            ctx.signal.addEventListener('abort', () => { stopped = true; resolve(null); });
+        }),
+    };
+    const started = Date.now();
+    const result = await job.runTool({ tool: hanging, level: 4 }, DEFAULTS, new AbortController().signal);
+    assert.strictEqual(result, null);
+    assert.ok(stopped, 'the tool was told to stop');
+    assert.ok(Date.now() - started < 5000);
+    assert.deepStrictEqual(job.problems, [{ tool: 'Hanging', problem: 'timed out' }]);
+});
+
+test('the time limit starts once the tool has a slot, not while it waits for one', async () => {
+    const { Semaphore } = require('../lib/semaphore');
+    const semaphore = new Semaphore(1);
+    const { job } = toolJob('wait.png');
+    job.semaphore = semaphore;
+    await semaphore.acquire(); // somebody else holds the only slot
+    const quick = {
+        id: 'quick', label: 'Quick', timeoutMs: () => 100,
+        run: async (ctx) => (ctx.signal.aborted ? null : null),
+    };
+    const pending = job.runTool({ tool: quick, level: 4 }, DEFAULTS, new AbortController().signal);
+    await new Promise((resolve) => setTimeout(resolve, 250)); // longer than the limit
+    semaphore.release();
+    await pending;
+    assert.deepStrictEqual(job.problems, [], 'waiting is not running');
+});
