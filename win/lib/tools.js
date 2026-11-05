@@ -161,7 +161,7 @@ const advpng = {
     enabled: (s) => s.AdvPngEnabled && s.PngOutRemoveChunks,
     async run(ctx) {
         const level = Math.max(1, Math.min(4, ctx.level));
-        fs.copyFileSync(ctx.input.path, ctx.temp); // advpng rewrites in place
+        await fs.promises.copyFile(ctx.input.path, ctx.temp); // advpng rewrites in place
 
         const args = [`-${level}`, '-z', '--', ctx.temp];
         const { code, output } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
@@ -221,7 +221,7 @@ const jpegoptim = {
         const maxquality = ctx.settings.LossyEnabled ? ctx.settings.JpegOptimMaxQuality : 100;
         const lossy = maxquality > 10 && maxquality < 100;
 
-        fs.copyFileSync(ctx.input.path, ctx.temp); // jpegoptim rewrites in place
+        await fs.promises.copyFile(ctx.input.path, ctx.temp); // jpegoptim rewrites in place
 
         const args = [
             strip ? '--strip-all' : '--strip-none',

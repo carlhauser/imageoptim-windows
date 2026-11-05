@@ -119,6 +119,31 @@ function renameWithRetry(from, to) {
     }
 }
 
+// The session's backups, which Revert puts back, each as big as the file it
+// stands for: a hard link costs no copying, but it keeps the original's data
+// alive once the optimized file has taken its name. Past this budget, newly
+// optimized files keep no backup and cannot be reverted, rather than 20,000
+// photos filling the drive with tens of gigabytes. Copies kept in "ImageOptim
+// originals" are the user's and do not count.
+const BACKUPS = { budget: 2 * 1024 * 1024 * 1024, used: 0 };
+
+// A backup made as a second name for the original's data where that is
+// possible - the temp folder on the same drive, and the file with no other
+// names of its own, whose data someone could still change - and as a copy
+// otherwise. Returns true for a link.
+function linkOrCopy(from, to, stat) {
+    if (stat && stat.nlink === 1) {
+        try {
+            fs.linkSync(from, to);
+            return true;
+        } catch (err) {
+            /* another drive, FAT, a network share: copy */
+        }
+    }
+    fs.copyFileSync(from, to);
+    return false;
+}
+
 // "photo (ImageOptim backup).png", or "(2)" and so on if that is taken
 function rescueName(dir, file) {
     const ext = path.extname(file);
@@ -300,6 +325,8 @@ class Job extends EventEmitter {
             noteDetail: this.note ? this.note.detail : null,
             progress: this.progressFraction(),
             canRevert: this.canRevert,
+            // Optimized past the session's backup budget, so no way back
+            revertLost: Boolean(this.originalLost),
             problems: this.problems.length ? this.problems.slice() : null,
         };
     }
@@ -599,7 +626,9 @@ class Job extends EventEmitter {
         if (!this.runCount || changedExternally) {
             this.originalSize = currentSize;
             if (changedExternally) {
+                // What is on disk now is the file's new original
                 this.dropBackup();
+                this.originalLost = false;
             }
         }
         this.bestSize = currentSize;
@@ -756,6 +785,8 @@ class Job extends EventEmitter {
             // respect at the instant it becomes the original.
             this.applyMetadata(staging, settings);
             renameWithRetry(staging, this.filePath);
+            // The backup's data is no longer the file's
+            this.backupIsLink = false;
             return;
         } catch (err) {
             unlinkQuietly(staging);
@@ -770,6 +801,10 @@ class Job extends EventEmitter {
             // Revert: the source is the backup itself, which this cannot harm
             fs.copyFileSync(source, this.filePath);
         } else {
+            // Writing into the original would write into a hard-linked backup
+            // too, so the backup gets data of its own first. If even that
+            // fails, nothing has been written.
+            this.detachBackup();
             try {
                 fs.copyFileSync(source, this.filePath);
             } catch (err) {
@@ -777,6 +812,15 @@ class Job extends EventEmitter {
             }
         }
         this.applyMetadata(this.filePath, settings);
+    }
+
+    detachBackup() {
+        if (!this.backupIsLink || !this.backupPath) return;
+        const own = tempPath('backup');
+        fs.copyFileSync(this.backupPath, own);
+        unlinkQuietly(this.backupPath);
+        this.backupPath = own;
+        this.backupIsLink = false;
     }
 
     applyMetadata(target, settings) {
@@ -836,12 +880,13 @@ class Job extends EventEmitter {
         if (now.size !== this.startSize || now.mtimeMs !== this.startMtimeMs) {
             throw new Error('the file changed on disk while it was being optimized');
         }
+        return now;
     }
 
     // Replaces the original with the best result, keeping a backup so the result
     // can be reverted from the UI.
     save(settings) {
-        this.assertUnchangedSinceStart();
+        const stat = this.assertUnchangedSinceStart();
         // The result is staged beside the original before it replaces it
         if (!hasRoomFor(path.dirname(this.filePath), this.bestSize)) {
             throw new Error('there is not enough free disk space beside it');
@@ -864,8 +909,12 @@ class Job extends EventEmitter {
                 this.keptSize = stat.size;
                 this.keptMtimeMs = stat.mtimeMs;
             } else {
+                // Made even past the budget: the save itself is safer with a
+                // backup in hand, and it is let go straight after
                 this.backupPath = tempPath('backup');
-                fs.copyFileSync(this.filePath, this.backupPath);
+                this.backupIsLink = linkOrCopy(this.filePath, this.backupPath, stat);
+                this.backupBytes = stat.size;
+                BACKUPS.used += this.backupBytes;
             }
         }
 
@@ -873,6 +922,15 @@ class Job extends EventEmitter {
 
         unlinkQuietly(this.bestPath);
         this.bestPath = null;
+
+        // Over the budget, or the original's own backup was already let go -
+        // a backup made now would hold an earlier result, not the original,
+        // and Revert would put that back as though it were
+        if (this.backupPath && !this.backupIsKept
+            && (this.originalLost || BACKUPS.used > BACKUPS.budget)) {
+            this.dropBackup();
+            this.originalLost = true;
+        }
 
         // Read back what is actually on disk rather than trusting the temp file's
         // measurements, since this is what the next run compares against.
@@ -941,9 +999,12 @@ class Job extends EventEmitter {
                 return { ok: false, reason: `it could not be written (${err.message})` };
             }
             unlinkQuietly(this.backupPath);
+            this.releaseBackup();
         }
         this.backupPath = null;
         this.backupIsKept = false;
+        this.backupIsLink = false;
+        this.originalLost = false;
         this.bestSize = this.originalSize;
         this.lastSavedSize = 0;
         this.lastSavedMtimeMs = 0;
@@ -965,9 +1026,17 @@ class Job extends EventEmitter {
     // A kept original is never deleted.
     dropBackup() {
         if (!this.backupIsKept && !this.backupPinned) unlinkQuietly(this.backupPath);
+        this.releaseBackup();
         this.backupPath = null;
         this.backupIsKept = false;
+        this.backupIsLink = false;
+    }
+
+    // Gives the backup's size back to the budget
+    releaseBackup() {
+        BACKUPS.used = Math.max(0, BACKUPS.used - (this.backupBytes || 0));
+        this.backupBytes = 0;
     }
 }
 
-module.exports = { Job, isSmall, sweepTempDirs, releaseTempDir, RENAME_RETRY };
+module.exports = { Job, isSmall, sweepTempDirs, releaseTempDir, RENAME_RETRY, BACKUPS };

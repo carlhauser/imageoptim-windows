@@ -349,3 +349,64 @@ test('the time limit starts once the tool has a slot, not while it waits for one
     await pending;
     assert.deepStrictEqual(job.problems, [], 'waiting is not running');
 });
+
+// ------------------------------------------------------------------- backups
+
+const { BACKUPS } = require('../lib/job');
+
+test('the backup is a hard link where it can be, and still holds the original after the save', () => {
+    const { job, file } = readyJob('linked.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2));
+    job.save(DEFAULTS);
+    // The temp folder and the scratch folder share a drive in the tests
+    assert.strictEqual(fs.statSync(job.backupPath).size, 1000);
+    assert.ok(fs.readFileSync(job.backupPath).every((b) => b === 1));
+    assert.ok(fs.readFileSync(file).every((b) => b === 2));
+    assert.strictEqual(job.revert(DEFAULTS).ok, true);
+    assert.ok(fs.readFileSync(file).every((b) => b === 1));
+});
+
+test('a file with other names gets a copy, not a link', () => {
+    const { job, file } = readyJob('twonames.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2));
+    fs.linkSync(file, path.join(scratch(), 'twonames-other.png'));
+    job.startMtimeMs = fs.statSync(file).mtimeMs; // a link touches only ctime, but be sure
+    job.save(DEFAULTS);
+    assert.strictEqual(fs.statSync(job.backupPath).nlink, 1);
+});
+
+test('writing straight over the original never writes into a linked backup', () => {
+    const { job, file } = readyJob('direct.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2));
+    withFs({
+        renameSync: () => () => { throw fsError('EPERM'); },
+    }, () => job.save(DEFAULTS));
+    assert.ok(fs.readFileSync(file).every((b) => b === 2), 'the result went in directly');
+    assert.strictEqual(fs.statSync(job.backupPath).size, 1000);
+    assert.ok(fs.readFileSync(job.backupPath).every((b) => b === 1), 'the backup is still the original');
+});
+
+test('past the backup budget a file keeps no backup, and never one of a later result', () => {
+    const budget = BACKUPS.budget;
+    BACKUPS.budget = BACKUPS.used + 1500; // room for one 1000-byte backup
+    try {
+        const first = readyJob('budget1.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2));
+        first.job.save(DEFAULTS);
+        assert.ok(first.job.canRevert);
+
+        const second = readyJob('budget2.png', Buffer.alloc(1000, 3), Buffer.alloc(400, 4));
+        second.job.save(DEFAULTS);
+        assert.strictEqual(second.job.canRevert, false, 'over the budget');
+        assert.strictEqual(second.job.toJSON().revertLost, true);
+
+        // Room again, but what is on disk now is a result, not the original
+        first.job.cleanup();
+        second.job.startSize = 400;
+        second.job.startMtimeMs = fs.statSync(second.file).mtimeMs;
+        const candidate = path.join(scratch(), 'budget2.again');
+        fs.writeFileSync(candidate, Buffer.alloc(300, 5));
+        second.job.bestPath = candidate;
+        second.job.bestSize = 300;
+        second.job.save(DEFAULTS);
+        assert.strictEqual(second.job.canRevert, false);
+    } finally {
+        BACKUPS.budget = budget;
+    }
+});
