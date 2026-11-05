@@ -233,6 +233,66 @@ fi
     return ($code -eq 0)
 }
 
+# The C tools take their arguments and open their files through the ANSI API:
+# a MinGW main() gets argv in the system code page, and fopen calls
+# CreateFileA. Any character that page cannot hold - Chinese or Japanese on a
+# Western PC, any emoji anywhere - arrives as '?', and so does nothing past 260
+# characters. The tool then fails to open the file, which the app cannot tell
+# from "already optimal". This manifest makes the process's code page UTF-8
+# (Windows 10 1903 and later) and lets it use long paths, so the same ANSI calls
+# take any path. It replaces MinGW's default manifest, whose asInvoker and
+# supported-OS entries it keeps. libavif links one like it for its own apps;
+# every executable gets this one, so they all behave alike.
+$Utf8Manifest = @'
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>
+'@
+
+function Set-Utf8Manifest {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    if (-not ('ImageOptimBuild.Resources' -as [type])) {
+        Add-Type -Namespace ImageOptimBuild -Name Resources -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern IntPtr BeginUpdateResource(string pFileName, bool bDeleteExistingResources);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool UpdateResource(IntPtr hUpdate, IntPtr lpType, IntPtr lpName, ushort wLanguage, byte[] lpData, uint cb);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool EndUpdateResource(IntPtr hUpdate, bool fDiscard);
+'@
+    }
+
+    $bytes = (New-Object System.Text.UTF8Encoding $false).GetBytes($Utf8Manifest)
+    $handle = [ImageOptimBuild.Resources]::BeginUpdateResource($Path, $false)
+    if ($handle -eq [IntPtr]::Zero) { return $false }
+    # RT_MANIFEST (24), resource 1, language-neutral: the same type, name and
+    # language as MinGW's default manifest, so it is replaced, not duplicated.
+    if (-not [ImageOptimBuild.Resources]::UpdateResource($handle, [IntPtr]24, [IntPtr]1, 0, $bytes, [uint32]$bytes.Length)) {
+        [ImageOptimBuild.Resources]::EndUpdateResource($handle, $true) | Out-Null
+        return $false
+    }
+    return [ImageOptimBuild.Resources]::EndUpdateResource($handle, $false)
+}
+
 # Copies a built artifact into $OutDir, adding the .exe suffix when the build
 # produced an extension-less binary (GNU make does that for hand-written rules).
 function Publish-Artifact {
@@ -247,6 +307,23 @@ function Publish-Artifact {
         if (Test-Path $src -PathType Leaf) {
             $dst = Join-Path $OutDir $TargetName
             Copy-Item -LiteralPath $src -Destination $dst -Force
+            # Symbols are no use in a release - Guetzli's alone were 7 MB - and
+            # they have to go before the manifest does: UpdateResource drops
+            # the COFF symbol table but leaves the header pointing at it, and
+            # objdump then calls the file "format not recognized".
+            if ((Invoke-Mingw -Script "strip --strip-all '$(ConvertTo-MsysPath $dst)'") -ne 0) {
+                Write-Host "    could not strip $TargetName" -ForegroundColor Red
+                Remove-Item -LiteralPath $dst -Force
+                $Results[$Tool] = 'FAILED'
+                return $false
+            }
+            if (-not (Set-Utf8Manifest -Path $dst)) {
+                # Kept, since it still works on every path its code page can
+                # spell, but reported: test\binaries.test.js fails on it too
+                Write-Host "    could not set the UTF-8 manifest on $TargetName" -ForegroundColor Red
+                $Results[$Tool] = 'FAILED'
+                return $false
+            }
             if (-not (Test-SelfContained -Path $dst)) {
                 # Deleted rather than left in place: the app lists a missing
                 # optimizer as missing, but runs a present one, and a run that

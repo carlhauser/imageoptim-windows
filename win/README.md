@@ -335,6 +335,22 @@ Running it all on a Windows 11 machine, rather than only in CI, found four more:
 - The `queue` cycle test made a symlink, which Windows only allows with
   administrator rights or Developer Mode; it now makes a junction.
 
+And one that only shows on files with the wrong names:
+
+- **Seven optimizers could not open a file whose path the system code page
+  cannot spell.** jpegoptim, jpegtran, zopflipng, gifsicle, guetzli, advpng and
+  pngcrush take `argv` and open files through the ANSI API, so on a Western PC
+  a Chinese or Japanese folder name, or any emoji, reached them as `?`, and so
+  did nothing past 260 characters. They failed, and the file read as already
+  optimal. `Publish-Artifact` now gives every executable a manifest that sets
+  the process code page to UTF-8 and makes it long-path aware (as libavif's
+  own `utf8.rc` does), replacing MinGW's default manifest but keeping its
+  `asInvoker` and supported-OS entries. It strips each executable first:
+  `UpdateResource` drops a COFF symbol table without fixing the header that
+  points at it, which `objdump` then refuses, and Guetzli alone carried 7 MB
+  of symbols. `binaries.test.js` runs every optimizer on a path over 260
+  characters with Chinese and an emoji in it.
+
 ## Runtime
 
 Electron 45.2.2 (Node 24, Chromium 156). Electron patches only its newest three

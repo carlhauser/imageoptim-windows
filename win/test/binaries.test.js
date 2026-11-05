@@ -61,84 +61,111 @@ function sample(type) {
 
 test.after(cleanupScratch);
 
+// Runs one optimizer for real on its sample, copied into `dir`, and checks
+// what it did: every command it ran exited as it should, and what it wrote
+// passes lib/validate.js. Both the input and the output live in `dir`.
+async function runForReal(tool, dir, { checkGain = true } = {}) {
+    const resolve = makeResolver(BIN);
+    const resolved = resolve(tool);
+    if (!resolved) {
+        assert.fail(`${tool.id} not found in ${BIN}`);
+    }
+
+    const type = tool.types[0];
+    const src = SAMPLE_FOR[tool.id] ? path.join(repoRoot, SAMPLE_FOR[tool.id]) : sample(type);
+    if (!src || !fs.existsSync(src)) {
+        assert.fail(`no ${type} sample available in the repository`);
+    }
+
+    const input = path.join(dir, `bin-${tool.id}-in${path.extname(src)}`);
+    fs.copyFileSync(src, input);
+    // .temp, matching lib/job.js tempPath. The suffix matters: advpng
+    // refuses a .tmp input outright. See the regression test below.
+    const temp = path.join(dir, `bin-${tool.id}-out.temp`);
+    const header = fs.readFileSync(input).subarray(0, HEADER_BYTES);
+
+    // Run for real, but keep every exit code and output for inspection:
+    // webpmux and avifenc each run two commands.
+    const seen = [];
+    const realRunTool = run.runTool;
+    run.runTool = async (options) => {
+        const result = await realRunTool(options);
+        seen.push({ exe: path.basename(options.exe), ...result });
+        return result;
+    };
+
+    let outcome;
+    try {
+        outcome = await tool.run({
+            input: { path: input, byteSize: fs.statSync(input).size, type },
+            temp,
+            settings: { ...DEFAULTS, LossyEnabled: true, GuetzliEnabled: true },
+            level: 4,
+            alternativeStrategy: false,
+            lossyGif: tool.id === 'gifsicle',
+            features: inspect(type, input, header),
+            signal: new AbortController().signal,
+            exe: resolved.exe,
+            script: resolved.script,
+            helpers: resolved.helpers,
+        });
+    } finally {
+        run.runTool = realRunTool;
+    }
+
+    assert.ok(seen.length, `${tool.id} never spawned anything`);
+    // pngquant uses 98 and 99 to decline an image; everything else should
+    // succeed on a valid input.
+    const benign = tool.id === 'pngquant' ? [0, 98, 99] : [0];
+    const rejected = /unrecognized option|unknown option|unrecognised option|invalid option/i;
+    for (const step of seen) {
+        assert.notStrictEqual(step.code, 127, `${step.exe} could not be executed`);
+        const hint = rejected.test(step.output)
+            ? ' - it reported an option it did not recognise'
+            : '';
+        assert.ok(benign.includes(step.code),
+            `${step.exe} exited ${step.code}${hint}:
+${step.output.slice(0, 400)}`);
+    }
+
+    // The new formats' tools are this port's own, with no macOS command
+    // line to check against, so their result is checked too: each of
+    // these samples has something to gain.
+    if (checkGain && (type === 'webp' || type === 'avif')) {
+        assert.ok(outcome && outcome.size > 0 && outcome.size < fs.statSync(input).size,
+            `${tool.id} produced no smaller file`);
+    }
+
+    // Whatever a real tool writes must pass the check that stands between
+    // it and the user's file, or that check would throw away good results
+    // (svgcleaner writes nothing at all when it would make the file bigger)
+    if (outcome && outcome.size) {
+        assert.ok(looksComplete(type, temp), `${tool.id}'s output failed lib/validate.js`);
+    }
+    return outcome;
+}
+
 for (const tool of tools.ALL) {
     test(`${tool.id} accepts the arguments it is given`, { skip }, async () => {
-        const resolve = makeResolver(BIN);
-        const resolved = resolve(tool);
-        if (!resolved) {
-            assert.fail(`${tool.id} not found in ${BIN}`);
-        }
+        await runForReal(tool, scratch());
+    });
+}
 
-        const type = tool.types[0];
-        const src = SAMPLE_FOR[tool.id] ? path.join(repoRoot, SAMPLE_FOR[tool.id]) : sample(type);
-        if (!src || !fs.existsSync(src)) {
-            assert.fail(`no ${type} sample available in the repository`);
-        }
+// The C tools read their arguments and open files through Windows' ANSI API,
+// so without the UTF-8 manifest build-windows.ps1 gives them, any character
+// the system code page lacks arrived as '?' and nothing past 260 characters
+// opened: the tool failed and the file read as already optimal. Chinese and
+// an emoji are outside every Western code page, and the folder takes the path
+// well past 260. Guetzli is left out: it only ever reads its own temp file,
+// and takes a minute.
+const UNICODE_DIR_PARTS = ['写真 フォト 📷', 'x'.repeat(120), 'y'.repeat(100)];
 
-        const input = path.join(scratch(), `bin-${tool.id}-in${path.extname(src)}`);
-        fs.copyFileSync(src, input);
-        // .temp, matching lib/job.js tempPath. The suffix matters: advpng
-        // refuses a .tmp input outright. See the regression test below.
-        const temp = path.join(scratch(), `bin-${tool.id}-out.temp`);
-        const header = fs.readFileSync(input).subarray(0, HEADER_BYTES);
-
-        // Run for real, but keep every exit code and output for inspection:
-        // webpmux and avifenc each run two commands.
-        const seen = [];
-        const realRunTool = run.runTool;
-        run.runTool = async (options) => {
-            const result = await realRunTool(options);
-            seen.push({ exe: path.basename(options.exe), ...result });
-            return result;
-        };
-
-        let outcome;
-        try {
-            outcome = await tool.run({
-                input: { path: input, byteSize: fs.statSync(input).size, type },
-                temp,
-                settings: { ...DEFAULTS, LossyEnabled: true, GuetzliEnabled: true },
-                level: 4,
-                alternativeStrategy: false,
-                lossyGif: tool.id === 'gifsicle',
-                features: inspect(type, input, header),
-                signal: new AbortController().signal,
-                exe: resolved.exe,
-                script: resolved.script,
-                helpers: resolved.helpers,
-            });
-        } finally {
-            run.runTool = realRunTool;
-        }
-
-        assert.ok(seen.length, `${tool.id} never spawned anything`);
-        // pngquant uses 98 and 99 to decline an image; everything else should
-        // succeed on a valid input.
-        const benign = tool.id === 'pngquant' ? [0, 98, 99] : [0];
-        const rejected = /unrecognized option|unknown option|unrecognised option|invalid option/i;
-        for (const step of seen) {
-            assert.notStrictEqual(step.code, 127, `${step.exe} could not be executed`);
-            const hint = rejected.test(step.output)
-                ? ' - it reported an option it did not recognise'
-                : '';
-            assert.ok(benign.includes(step.code),
-                `${step.exe} exited ${step.code}${hint}:\n${step.output.slice(0, 400)}`);
-        }
-
-        // The new formats' tools are this port's own, with no macOS command
-        // line to check against, so their result is checked too: each of
-        // these samples has something to gain.
-        if (type === 'webp' || type === 'avif') {
-            assert.ok(outcome && outcome.size > 0 && outcome.size < fs.statSync(input).size,
-                `${tool.id} produced no smaller file`);
-        }
-
-        // Whatever a real tool writes must pass the check that stands between
-        // it and the user's file, or that check would throw away good results
-        // (svgcleaner writes nothing at all when it would make the file bigger)
-        if (outcome && outcome.size) {
-            assert.ok(looksComplete(type, temp), `${tool.id}'s output failed lib/validate.js`);
-        }
+for (const tool of tools.ALL.filter((t) => t.id !== 'guetzli')) {
+    test(`${tool.id} works on a long path with Chinese and an emoji in it`, { skip }, async () => {
+        const dir = path.join(scratch(), ...UNICODE_DIR_PARTS);
+        fs.mkdirSync(dir, { recursive: true });
+        assert.ok(path.join(dir, 'bin-x-in.png').length > 260);
+        await runForReal(tool, dir);
     });
 }
 
