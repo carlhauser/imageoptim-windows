@@ -282,7 +282,10 @@ const guetzli = {
     label: 'Guetzli',
     types: [JPEG],
     lossy: true,
-    serial: true, // Guetzli's memory use makes parallel runs dangerous
+    // One at a time across every file, as GuetzliWorker.m does: each run may
+    // take gigabytes (--memlimit 6000 below), and one per worker slot could
+    // ask for ten times what the PC has. See lib/job.js runTool.
+    exclusive: true,
     enabled: (s) => s.GuetzliEnabled && s.JpegOptimMaxQuality >= 80,
     async run(ctx) {
         let level = ctx.settings.LossyEnabled ? ctx.settings.JpegOptimMaxQuality : 95;

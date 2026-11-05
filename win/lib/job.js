@@ -9,6 +9,7 @@ const tools = require('./tools');
 const { hashFile, statKey, profileFor, satisfies } = require('./history');
 const { keepOriginal, removeIfEmpty, sameContent } = require('./originals');
 const { looksComplete, hasRoomFor } = require('./validate');
+const { Semaphore } = require('./semaphore');
 const {
     detectType, inspect, typeFromExtension, isSmall, HEADER_BYTES, PNG, JPEG, GIF, SVG, WEBP, AVIF,
 } = require('./filetype');
@@ -18,6 +19,14 @@ let tempRoot = null;
 
 // The cores the optimizers share (lib/semaphore.js threadsPerSlot)
 const CORES = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+
+// Tools marked exclusive (Guetzli) run one at a time across every file
+const gates = new Map();
+function gateFor(tool) {
+    if (!tool.exclusive) return null;
+    if (!gates.has(tool.id)) gates.set(tool.id, new Semaphore(1));
+    return gates.get(tool.id);
+}
 
 // Everything scratch lives in one directory we own, so a crash leaves a single
 // identifiable folder and startup can reclaim it. Writing loose files straight
@@ -162,6 +171,8 @@ class Job extends EventEmitter {
         // From the queue: how far along this file is by time, or null
         this.estimate = options.estimate || null;
         this.history = options.history || null; // lib/history.js, if any
+        // From the queue: whether fewer files are in hand than worker slots
+        this.underUtilized = options.underUtilized || null;
         this.force = false; // Again: optimize even if already optimized
         this.waiting = false; // in the queue's pending list (lib/queue.js)
         this.inputHash = null;
@@ -408,6 +419,15 @@ class Job extends EventEmitter {
 
         // Optimizers that rewrite the image rather than merely recompressing it
         // have to run first, one at a time, so later tools see their output.
+        //
+        // Unless only a few files are being optimized: then, as in Job.m, one
+        // that is first only for that reason - Zopfli, a lossy JpegOptim pass,
+        // Pngcrush stripping - races the others on the same input instead, and
+        // the smallest result still wins. Otherwise a handful of PNGs leaves
+        // the PC on one core while Zopfli runs alone. Small files keep the
+        // order, and so do steps marked first: pngquant has to feed the
+        // others, and webpmux strips before a lossy re-encode is measured.
+        const race = underUtilized && !isSmall(this.type, this.bestSize);
         const runFirst = [];
         const runLater = [];
         for (const step of plan) {
@@ -415,7 +435,8 @@ class Job extends EventEmitter {
                 || (step.tool.makesNonOptimizingModifications
                     ? step.tool.makesNonOptimizingModifications(settings)
                     : step.tool.lossy);
-            (destructive ? runFirst : runLater).push({ ...step, level });
+            const first = step.first || (destructive && !race);
+            (first ? runFirst : runLater).push({ ...step, level });
         }
 
         return { runFirst, runLater, level, note: plan.length ? null : note };
@@ -466,6 +487,15 @@ class Job extends EventEmitter {
             return tool.run(ctx);
         };
 
+        // A tool that may only run once at a time waits for its turn before it
+        // takes a worker slot, so the waiting does not hold one up
+        const gate = gateFor(tool);
+        if (gate && !(await gate.acquire(signal))) {
+            this.toolsDone += 1;
+            this.emit('change', this);
+            return null;
+        }
+
         let result = null;
         try {
             // One slot per running optimizer, shared with every other file. A
@@ -474,6 +504,8 @@ class Job extends EventEmitter {
         } catch (err) {
             console.warn(`${tool.id} failed:`, err.message);
             this.noteProblem(tool, 'failed');
+        } finally {
+            if (gate) gate.release();
         }
 
         // Nothing written is nothing gained, not damage: svgcleaner, for one,
@@ -619,7 +651,9 @@ class Job extends EventEmitter {
             }
         }
 
-        const { runFirst, runLater, level, note } = this.planTools(settings);
+        const { runFirst, runLater, level, note } = this.planTools(settings, {
+            underUtilized: Boolean(this.underUtilized && this.underUtilized()),
+        });
         this.toolsTotal = runFirst.length + runLater.length;
         this.toolsDone = 0;
         // What the queue learns this file's duration under, now that the
@@ -660,14 +694,7 @@ class Job extends EventEmitter {
 
         // Lossless passes all start from the same input and compete for smallest
         if (!signal.aborted && runLater.length) {
-            const serial = runLater.filter((s) => s.tool.serial);
-            const parallel = runLater.filter((s) => !s.tool.serial);
-
-            const results = await Promise.all(parallel.map((step) => this.runTool(step, settings, signal)));
-            for (const step of serial) {
-                if (signal.aborted) break;
-                results.push(await this.runTool(step, settings, signal));
-            }
+            const results = await Promise.all(runLater.map((step) => this.runTool(step, settings, signal)));
 
             // Smallest first, so adopt() keeps the best and discards the rest
             results

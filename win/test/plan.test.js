@@ -232,3 +232,41 @@ test('costClass guesses the type from the extension before the header is read', 
     job.originalSize = 1000;
     assert.strictEqual(job.costClass({ ...DEFAULTS, LossyEnabled: true }), 'jpeg+lossy');
 });
+
+// Job.m: with worker slots to spare, a step that is first only because it
+// rewrites the file races the others, so a few files keep every core busy
+
+function planIdle(type, settings, size, underUtilized) {
+    const job = new Job(makeFile(`idle-${Math.random().toString(16).slice(2)}.${type}`, type, size), {
+        resolveTool: () => ({ exe: '/fake/tool' }),
+    });
+    job.type = type;
+    job.bestSize = job.originalSize = size;
+    const { runFirst, runLater } = job.planTools({ ...DEFAULTS, ...settings }, { underUtilized });
+    return { first: runFirst.map((s) => s.tool.id), later: runLater.map((s) => s.tool.id) };
+}
+
+test('few files: Zopfli races oxipng and AdvPNG instead of going first', () => {
+    const busy = planIdle('png', {}, 100 * 1024, false);
+    assert.deepStrictEqual(busy.first, ['zopflipng']);
+    const idle = planIdle('png', {}, 100 * 1024, true);
+    assert.deepStrictEqual(idle.first, []);
+    assert.deepStrictEqual(idle.later.sort(), ['advpng', 'oxipng', 'zopflipng']);
+});
+
+test('few files: a small file and pngquant keep their order', () => {
+    assert.deepStrictEqual(planIdle('png', {}, 1000, true).first, ['zopflipng'], 'small');
+    const lossy = planIdle('png', { LossyEnabled: true }, 100 * 1024, true);
+    assert.deepStrictEqual(lossy.first, ['pngquant'], 'pngquant still feeds the others');
+});
+
+test('few files: webpmux still strips before the lossy re-encode', () => {
+    const job = new Job(makeFile(`idle-webp-${Math.random().toString(16).slice(2)}.webp`, 'webp', 100 * 1024), {
+        resolveTool: () => ({ exe: '/fake/tool' }),
+    });
+    job.type = 'webp';
+    job.bestSize = job.originalSize = 100 * 1024;
+    job.features = { ...LOSSY_WEBP, exif: true };
+    const { runFirst } = job.planTools({ ...DEFAULTS, LossyEnabled: true }, { underUtilized: true });
+    assert.deepStrictEqual(runFirst.map((s) => s.tool.id), ['webpmux', 'cwebp-lossy']);
+});

@@ -288,6 +288,7 @@ class Queue extends EventEmitter {
                     resolveTool: this.resolveTool,
                     semaphore: this.semaphore,
                     estimate: (estimated) => this.batch.jobFraction(estimated.id),
+                    underUtilized: () => this.pending.length + this.running < this.workerLimit(),
                     history: this.history,
                 });
                 // The job itself, not a snapshot: whoever listens decides when
