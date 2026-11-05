@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const log = require('./log');
 const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
@@ -87,7 +88,7 @@ function unlinkQuietly(filePath) {
     try {
         fs.unlinkSync(filePath);
     } catch (err) {
-        if (err.code !== 'ENOENT') console.warn('Could not remove temp file:', err.message);
+        if (err.code !== 'ENOENT') log.warn('Could not remove temp file:', err.message);
     }
 }
 
@@ -271,7 +272,7 @@ class Job extends EventEmitter {
                 written,
             });
         } catch (err) {
-            console.warn('Could not remember an optimized file:', err.message);
+            log.warn('Could not remember an optimized file:', err.message);
         }
     }
 
@@ -552,7 +553,7 @@ class Job extends EventEmitter {
             // file stopped while waiting gives up its place in line.
             result = this.semaphore ? await this.semaphore.run(execute, signal) : await execute();
         } catch (err) {
-            console.warn(`${tool.id} failed:`, err.message);
+            log.warn(`${tool.id} failed:`, err.message);
             this.noteProblem(tool, 'failed');
         } finally {
             if (gate) gate.release();
@@ -563,12 +564,12 @@ class Job extends EventEmitter {
         if (result && !result.size) result = null;
 
         if (timeout && timeout.aborted && !signal.aborted) {
-            console.warn(`${tool.id} timed out`);
+            log.warn(`${tool.id} timed out`);
             this.noteProblem(tool, 'timed out');
             result = null;
         } else if (result && !signal.aborted && !looksComplete(this.type, temp)) {
             // Exited 0 with a smaller file that is not a whole image
-            console.warn(`${tool.id} produced an incomplete file`);
+            log.warn(`${tool.id} produced an incomplete file`);
             this.noteProblem(tool, 'produced a damaged file');
             result = null;
         }

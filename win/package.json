@@ -31,7 +31,9 @@
       "main.js",
       "preload.js",
       "lib/**/*",
-      "renderer/**/*"
+      "renderer/**/*",
+      "resources/svgo.js",
+      "!**/*.map"
     ],
     "extraResources": [
       {
@@ -39,10 +41,21 @@
         "to": ".",
         "filter": [
           "**/*",
-          "!bin/.gitkeep"
+          "!bin/.gitkeep",
+          "!svgo.js"
         ]
       }
     ],
+    "electronLanguages": [
+      "en-US"
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
     "fileAssociations": [
       {
         "ext": "png",

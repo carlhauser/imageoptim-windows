@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const log = require('./log');
 const os = require('os');
 const path = require('path');
 
@@ -228,7 +229,7 @@ class Settings {
             stored = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
         } catch (err) {
             if (err.code !== 'ENOENT') {
-                console.warn('Could not read settings:', err.message);
+                log.warn('Could not read settings:', err.message);
             }
             return;
         }
@@ -259,7 +260,7 @@ class Settings {
             fs.writeFileSync(staging, `${JSON.stringify(changed, null, 2)}\n`);
             fs.renameSync(staging, this.filePath);
         } catch (err) {
-            console.warn('Could not write settings:', err.message);
+            log.warn('Could not write settings:', err.message);
             try { fs.unlinkSync(staging); } catch (e) { /* not there */ }
         }
     }

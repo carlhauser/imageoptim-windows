@@ -8,9 +8,9 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('imageoptim', {
     pathForFile: (file) => {
         try {
-            return webUtils.getPathForFile(file);
+            return webUtils.getPathForFile(file) || null;
         } catch (err) {
-            return file.path || null;
+            return null; // not a file from disk
         }
     },
 

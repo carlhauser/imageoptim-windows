@@ -17,7 +17,9 @@ const EXE_SUFFIX = process.platform === 'win32' ? '.exe' : '';
 
 // Locates an optimizer. Tools whose executable is missing are skipped rather
 // than treated as an error, so a partial build still optimizes what it can.
-function makeResolver(binDir) {
+// scriptDirs: where to look first for a script such as svgo.js. The packaged
+// app keeps it inside app.asar, where the asar integrity check covers it.
+function makeResolver(binDir, { scriptDirs = [] } = {}) {
     const resourcesDir = path.dirname(binDir);
     const cache = new Map();
 
@@ -27,7 +29,8 @@ function makeResolver(binDir) {
         let resolved = null;
 
         if (tool.script) {
-            for (const candidate of [path.join(resourcesDir, tool.script), path.join(binDir, tool.script)]) {
+            const dirs = [...scriptDirs, resourcesDir, binDir];
+            for (const candidate of dirs.map((dir) => path.join(dir, tool.script))) {
                 if (fs.existsSync(candidate)) {
                     resolved = { script: candidate };
                     break;
@@ -197,7 +200,7 @@ class Queue extends EventEmitter {
     constructor(options) {
         super();
         this.settings = options.settings;
-        this.resolveTool = makeResolver(options.binDir);
+        this.resolveTool = makeResolver(options.binDir, { scriptDirs: options.scriptDirs || [] });
         this.binDir = options.binDir;
         this.jobs = new Map();
         this.pending = [];

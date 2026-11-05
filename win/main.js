@@ -2,9 +2,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const {
     app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, clipboard,
-    Notification, powerSaveBlocker, screen, systemPreferences,
+    Notification, powerSaveBlocker, screen, systemPreferences, session, crashReporter,
 } = require('electron');
 
 const { Settings } = require('./lib/settings');
@@ -13,6 +14,8 @@ const { History } = require('./lib/history');
 const { sweepTempDirs, releaseTempDir } = require('./lib/job');
 const updates = require('./lib/updater');
 const svgo = require('./lib/svgo');
+const log = require('./lib/log');
+const { filePathsFromArgv: argvPaths } = require('./lib/argv');
 
 // Long enough that the first check does not compete with startup.
 const UPDATE_CHECK_DELAY_MS = 3000;
@@ -21,7 +24,9 @@ const UPDATE_CHECK_DELAY_MS = 3000;
 // resources\bin; a checkout uses win\resources\bin. IMAGEOPTIM_BIN overrides
 // both, which is how the app can be driven against a non-default tool set.
 function resolveBinDir() {
-    if (process.env.IMAGEOPTIM_BIN) {
+    // Only in a checkout: in the installed app, anything that could set an
+    // environment variable could swap every optimizer for its own program
+    if (process.env.IMAGEOPTIM_BIN && !app.isPackaged) {
         return path.resolve(process.env.IMAGEOPTIM_BIN);
     }
     if (app.isPackaged) {
@@ -38,39 +43,10 @@ function resolveIcon() {
     return fs.existsSync(icon) ? icon : undefined;
 }
 
-// NTFS paths are case-insensitive.
-function samePath(a, b) {
-    return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
-
-// Paths passed on the command line, which is how Windows hands over files when
-// you open an image with the app or drop one on its icon.
-//
-// A relative path means relative to the folder it was typed in. For a second
-// launch that is not this process's working directory, and resolving against
-// ours could match a different file of the same name - which would then be
-// optimized and overwritten. 'second-instance' passes the caller's directory.
+// Files and folders on the command line (lib/argv.js). Run from a checkout,
+// the app's own folder is one of the arguments and must not be taken for one.
 function filePathsFromArgv(argv, cwd = process.cwd()) {
-    // Run as `electron <app>` - `npm start`, or electron.exe pointed at a
-    // checkout - the app's own directory is one of the arguments. Skipping only
-    // the literal "." let `electron C:\...\win` treat the checkout as a dropped
-    // folder and rewrite every image inside it. It is matched by value: it is
-    // argv[1] at startup, but in the argv a second instance forwards, Chromium
-    // has moved its switches in front of it.
-    const appDir = process.defaultApp ? path.resolve(app.getAppPath()) : null;
-    return argv
-        .slice(1)
-        .filter((arg) => !arg.startsWith('-') && arg !== '.')
-        .map((arg) => path.resolve(cwd, arg))
-        .filter((file) => !(appDir && samePath(file, appDir)))
-        .filter((file) => {
-            try {
-                const stat = fs.statSync(file);
-                return stat.isFile() || stat.isDirectory();
-            } catch (err) {
-                return false;
-            }
-        });
+    return argvPaths(argv, cwd, { appDir: process.defaultApp ? app.getAppPath() : null });
 }
 
 let mainWindow = null;
@@ -135,12 +111,15 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            sandbox: false, // the preload needs webUtils for dropped-file paths
+            // Sandboxed, as Electron's default is: the preload needs only
+            // contextBridge, ipcRenderer and webUtils, which a sandboxed one
+            // has. A flaw in the renderer then stays inside the sandbox.
+            sandbox: true,
         },
     });
 
     if (bounds && bounds.maximized) mainWindow.maximize();
-    mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    mainWindow.loadFile(PAGE);
     // A finished batch flashes the taskbar button until the window is looked at
     mainWindow.on('focus', () => mainWindow.flashFrame(false));
     mainWindow.on('close', (event) => {
@@ -480,6 +459,10 @@ function buildMenu() {
                     click: () => { if (updateController) updateController.check({ manual: true }); },
                 }] : []),
                 {
+                    label: 'Open Log Folder',
+                    click: () => { if (log.dir()) shell.openPath(log.dir()); },
+                },
+                {
                     label: 'Releases on GitHub',
                     click: () => shell.openExternal(updates.RELEASES_URL),
                 },
@@ -647,30 +630,57 @@ function windowsAccent() {
     }
 }
 
+const PAGE = path.join(__dirname, 'renderer', 'index.html');
+const PAGE_URL = pathToFileURL(PAGE).href.toLowerCase();
+
+// The handlers below act on the user's files, so they answer only the app's
+// own page in its own window - not a frame, not another page it was somehow
+// sent to.
+function fromOurPage(event) {
+    const frame = event.senderFrame;
+    return Boolean(frame && mainWindow && !mainWindow.isDestroyed()
+        && event.sender === mainWindow.webContents
+        && frame === mainWindow.webContents.mainFrame
+        && frame.url.toLowerCase() === PAGE_URL);
+}
+
+function handle(channel, fn) {
+    ipcMain.handle(channel, (event, ...args) => {
+        if (!fromOurPage(event)) throw new Error(`${channel}: not from the app's own page`);
+        return fn(event, ...args);
+    });
+}
+
+// Paths from the window: strings, absolute, and no more than one drop holds
+function absolutePaths(paths) {
+    if (!Array.isArray(paths)) return [];
+    return paths.slice(0, 100000).filter((p) => typeof p === 'string' && p.length < 32768 && path.isAbsolute(p));
+}
+
 function registerIpc() {
-    ipcMain.handle('files:add', (event, paths) => queue.add(paths || []));
-    ipcMain.handle('files:choose', () => openFileDialog());
-    ipcMain.handle('folders:choose', () => openFolderDialog());
+    handle('files:add', (event, paths) => queue.add(absolutePaths(paths)));
+    handle('files:choose', () => openFileDialog());
+    handle('folders:choose', () => openFolderDialog());
 
     // These answer with counts at most: the files' own changes follow as
     // jobs:changed, in batches
-    ipcMain.handle('queue:stop', () => { queue.stop(); return true; });
-    ipcMain.handle('queue:again', () => { queue.again(); return true; });
-    ipcMain.handle('queue:clear', () => clearList());
-    ipcMain.handle('queue:snapshot', () => ({ jobs: queue.snapshot(), stats: queue.stats() }));
+    handle('queue:stop', () => { queue.stop(); return true; });
+    handle('queue:again', () => { queue.again(); return true; });
+    handle('queue:clear', () => clearList());
+    handle('queue:snapshot', () => ({ jobs: queue.snapshot(), stats: queue.stats() }));
 
     // Ids are the queue's keys, not paths to act on: only a file in the list
     // is ever opened, shown, restored or removed
-    ipcMain.handle('jobs:command', (event, command, ids) => runJobCommand(String(command), ids));
-    ipcMain.handle('jobs:menu', (event, ids) => { showJobMenu(ids); });
+    handle('jobs:command', (event, command, ids) => runJobCommand(String(command), ids));
+    handle('jobs:menu', (event, ids) => { showJobMenu(ids); });
 
     // Windows' accent colour, as RRGGBB, for Appearance's "Use the Windows
     // accent colour"; the window hears when it changes
-    ipcMain.handle('accent:get', () => windowsAccent());
+    handle('accent:get', () => windowsAccent());
 
     // Questions the window asks before something it cannot undo. It names
     // which; the words are the main process's own.
-    ipcMain.handle('confirm', async (event, kind) => {
+    handle('confirm', async (event, kind) => {
         const question = CONFIRM[kind];
         if (!question) return false;
         const { response } = await messageBox({
@@ -684,14 +694,14 @@ function registerIpc() {
         return response === 0;
     });
 
-    ipcMain.handle('settings:get', () => settings.all());
-    ipcMain.handle('settings:set', (event, patch) => {
+    handle('settings:get', () => settings.all());
+    handle('settings:set', (event, patch) => {
         const values = settings.update(patch && typeof patch === 'object' ? patch : {});
         if (patch && 'Theme' in patch) applyTheme();
         syncMenu();
         return values;
     });
-    ipcMain.handle('settings:reset', () => {
+    handle('settings:reset', () => {
         const values = settings.reset();
         applyTheme();
         syncMenu();
@@ -700,19 +710,19 @@ function registerIpc() {
 
     // Settings → Options → Files: how many files are remembered as optimized,
     // and forgetting them all
-    ipcMain.handle('history:stats', () => ({ count: history.count() }));
-    ipcMain.handle('history:forget', () => {
+    handle('history:stats', () => ({ count: history.count() }));
+    handle('history:forget', () => {
         history.forget();
         return { count: 0 };
     });
 
-    ipcMain.handle('tools:list', () => ({
+    handle('tools:list', () => ({
         binDir: queue.binDir,
         tools: queue.installedTools(),
     }));
 
-    ipcMain.handle('update:state', () => (updateController ? updateController.snapshot() : null));
-    ipcMain.handle('update:action', (event, id) => (
+    handle('update:state', () => (updateController ? updateController.snapshot() : null));
+    handle('update:action', (event, id) => (
         updateController ? updateController.action(String(id)) : { ok: false, reason: 'not-ready' }
     ));
 }
@@ -803,6 +813,47 @@ function setupUpdates() {
     if (kind !== 'dev') setTimeout(() => updateController.check(), UPDATE_CHECK_DELAY_MS);
 }
 
+// What goes wrong goes into the logs folder in userData (lib/log.js), and crash dumps stay
+// on this PC: nothing is uploaded anywhere.
+log.open(path.join(app.getPath('userData'), 'logs'));
+crashReporter.start({ uploadToServer: false });
+let errorShown = false;
+process.on('uncaughtException', (err) => {
+    log.error('Uncaught exception:', err);
+    if (errorShown || !app.isReady()) return;
+    errorShown = true;
+    dialog.showErrorBox('ImageOptim ran into a problem',
+        'Details are in its log: Help, Open Log Folder. The files being optimized are not affected unless their rows say so.');
+});
+process.on('unhandledRejection', (reason) => log.error('Unhandled rejection:', reason));
+app.on('render-process-gone', (event, contents, details) => log.error('The window process ended:', details.reason, details.exitCode));
+app.on('child-process-gone', (event, details) => {
+    if (details.reason !== 'clean-exit') log.error(`A ${details.type} process ended:`, details.reason, details.exitCode);
+});
+
+// The packaged app is never debugged from outside: Electron's fuses switch off
+// --inspect and NODE_OPTIONS (package.json), and this the one switch they
+// cannot reach. A checkout keeps it - the screenshot script uses it.
+if (app.isPackaged && app.commandLine.hasSwitch('remote-debugging-port')) {
+    app.quit();
+    return;
+}
+
+// The window shows one page and never anything else: no navigating away -
+// a file dropped outside the drop handler would otherwise open in it - no new
+// windows, no webviews, and no permission granted to anything.
+app.on('web-contents-created', (event, contents) => {
+    contents.on('will-navigate', (navigation) => navigation.preventDefault());
+    contents.on('will-redirect', (navigation) => navigation.preventDefault());
+    contents.on('will-attach-webview', (attach) => attach.preventDefault());
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+});
+
+app.whenReady().then(() => {
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback) => callback(false));
+    session.defaultSession.setPermissionCheckHandler(() => false);
+});
+
 if (!app.requestSingleInstanceLock()) {
     // Without the return the rest of this file still runs in the losing
     // instance, which goes on to build its own Settings and Queue.
@@ -825,7 +876,13 @@ app.whenReady().then(() => {
     createWindow();
 
     history = new History(path.join(app.getPath('userData'), 'optimized.jsonl'), { batchMs: 1000 }).load();
-    queue = new Queue({ settings, binDir: resolveBinDir(), history });
+    queue = new Queue({
+        settings,
+        binDir: resolveBinDir(),
+        // svgo.js, inside app.asar when packaged
+        scriptDirs: [path.join(__dirname, 'resources')],
+        history,
+    });
 
     queue.on('job', jobChanged);
     queue.on('progress', () => {

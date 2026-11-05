@@ -83,6 +83,7 @@ const pngquant = {
             stdoutPath: ctx.temp,
             signal: ctx.signal,
             env: rayonEnv(ctx),
+            expectedCodes: [98, 99],
         });
 
         // 98 = output was not smaller, 99 = quality floor not reachable. Both are

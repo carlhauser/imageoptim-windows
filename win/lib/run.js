@@ -2,6 +2,8 @@
 
 const fs = require('fs');
 const os = require('os');
+const path = require('path');
+const log = require('./log');
 const { spawn } = require('child_process');
 
 const PRIORITY = os.constants.priority.PRIORITY_BELOW_NORMAL;
@@ -20,7 +22,9 @@ function runTool(options) {
         stdoutPath = null,  // write the child's stdout to this file
         signal = null,      // AbortSignal used to stop the job
         env = null,         // extra environment variables for the child
+        expectedCodes = [], // non-zero exits that are answers, not failures
     } = options;
+    const started = Date.now();
 
     return new Promise((resolve, reject) => {
         let stdin = 'ignore';
@@ -107,6 +111,11 @@ function runTool(options) {
         child.on('close', (code, sig) => {
             closeFds();
             if (signal) signal.removeEventListener('abort', onAbort);
+            // A failure worth knowing about later: the app shows such a file
+            // as merely not improved
+            if (code !== 0 && !expectedCodes.includes(code) && !(signal && signal.aborted)) {
+                log.info(`${path.basename(exe)} exited ${code === null ? sig : code} after ${Date.now() - started} ms:`, output.slice(-300).trim());
+            }
             resolve({ code, signal: sig, output });
         });
     });

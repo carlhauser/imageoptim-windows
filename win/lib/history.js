@@ -17,6 +17,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const log = require('./log');
 const path = require('path');
 
 const DEFAULT_CAP = 50000;
@@ -94,7 +95,7 @@ class History {
         try {
             text = fs.readFileSync(this.filePath, 'utf8');
         } catch (err) {
-            if (err.code !== 'ENOENT') console.warn('Could not read the optimized-files list:', err.message);
+            if (err.code !== 'ENOENT') log.warn('Could not read the optimized-files list:', err.message);
             return this;
         }
         // A torn last line has no newline: the next record must not join it
@@ -178,7 +179,7 @@ class History {
             fs.appendFileSync(this.filePath, `${this.needsNewline ? '\n' : ''}${lines.join('\n')}\n`);
             this.needsNewline = false;
         } catch (err) {
-            console.warn('Could not update the optimized-files list:', err.message);
+            log.warn('Could not update the optimized-files list:', err.message);
         }
     }
 
@@ -217,7 +218,7 @@ class History {
             fs.writeFileSync(staging, out.length ? `${out.join('\n')}\n` : '');
             fs.renameSync(staging, this.filePath);
         } catch (err) {
-            console.warn('Could not compact the optimized-files list:', err.message);
+            log.warn('Could not compact the optimized-files list:', err.message);
             try { fs.unlinkSync(staging); } catch (e) { /* not there */ }
             this.flush(); // keep the records at least
             return;
@@ -245,7 +246,7 @@ class History {
         try {
             fs.unlinkSync(this.filePath);
         } catch (err) {
-            if (err.code !== 'ENOENT') console.warn('Could not remove the optimized-files list:', err.message);
+            if (err.code !== 'ENOENT') log.warn('Could not remove the optimized-files list:', err.message);
         }
     }
 }
