@@ -71,4 +71,6 @@ function removeIfEmpty(dir) {
     }
 }
 
-module.exports = { ORIGINALS_DIR, isOriginalsDir, isInOriginals, keepOriginal, removeIfEmpty };
+module.exports = {
+    ORIGINALS_DIR, isOriginalsDir, isInOriginals, keepOriginal, removeIfEmpty, sameContent,
+};

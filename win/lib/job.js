@@ -7,7 +7,7 @@ const { EventEmitter } = require('events');
 
 const tools = require('./tools');
 const { hashFile, statKey, profileFor, satisfies } = require('./history');
-const { keepOriginal, removeIfEmpty } = require('./originals');
+const { keepOriginal, removeIfEmpty, sameContent } = require('./originals');
 const {
     detectType, inspect, typeFromExtension, isSmall, HEADER_BYTES, PNG, JPEG, GIF, SVG, WEBP, AVIF,
 } = require('./filetype');
@@ -74,6 +74,47 @@ function unlinkQuietly(filePath) {
     } catch (err) {
         if (err.code !== 'ENOENT') console.warn('Could not remove temp file:', err.message);
     }
+}
+
+// What Windows says, briefly, when a file another program has open cannot be
+// replaced. Antivirus scanners, the search indexer, OneDrive and thumbnailers
+// all hold an image for a moment after it changes, so these usually clear up.
+const TRANSIENT = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+// How hard replaceOriginal tries before giving up on the atomic rename. The
+// waits add up to about 1.4 s. Tests turn the delay down.
+const RENAME_RETRY = { attempts: 8, delayMs: 50 };
+
+// A blocking wait. save() stays synchronous on purpose, so that Stop, Clear
+// and quitting can never land halfway through writing over an original; the
+// cost is that a retry holds the main process for its few hundred ms, and
+// that only happens when a rename has already failed.
+function sleepSync(ms) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function renameWithRetry(from, to) {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            fs.renameSync(from, to);
+            return;
+        } catch (err) {
+            if (attempt >= RENAME_RETRY.attempts || !TRANSIENT.has(err.code)) throw err;
+            sleepSync(RENAME_RETRY.delayMs * attempt);
+        }
+    }
+}
+
+// "photo (ImageOptim backup).png", or "(2)" and so on if that is taken
+function rescueName(dir, file) {
+    const ext = path.extname(file);
+    const base = path.basename(file, ext);
+    for (let n = 1; n <= 99; n++) {
+        const name = n === 1 ? `${base} (ImageOptim backup)${ext}` : `${base} (ImageOptim backup ${n})${ext}`;
+        const candidate = path.join(dir, name);
+        if (!fs.existsSync(candidate)) return candidate;
+    }
+    return null;
 }
 
 // Why a WebP or AVIF file got no optimizer: short enough for the Savings
@@ -617,6 +658,9 @@ class Job extends EventEmitter {
     // The replacement is staged beside the target - same directory, so the same
     // volume - and renamed on top, which is atomic on NTFS. A crash therefore
     // leaves either the old file or the new one, never a truncated image.
+    //
+    // A rename refused because another program has the file open for a moment
+    // is retried before anything less safe is attempted.
     replaceOriginal(source, settings) {
         const dir = path.dirname(this.filePath);
         const staging = path.join(dir, `.imageoptim-${process.pid.toString(16)}-${(tempCounter += 1).toString(16)}.tmp`);
@@ -625,28 +669,72 @@ class Job extends EventEmitter {
             fs.copyFileSync(source, staging);
             // Apply metadata to the staged copy, so the file is complete in every
             // respect at the instant it becomes the original.
-            if (settings.PreservePermissions) {
-                try { fs.chmodSync(staging, this.mode); } catch (err) { /* best effort */ }
-            }
-            if (settings.PreserveDates) {
-                try { fs.utimesSync(staging, this.atime, this.mtime); } catch (err) { /* best effort */ }
-            }
-            fs.renameSync(staging, this.filePath);
+            this.applyMetadata(staging, settings);
+            renameWithRetry(staging, this.filePath);
             return;
         } catch (err) {
             unlinkQuietly(staging);
-            // Some network and FUSE volumes refuse a rename over an open file.
-            // Fall back to a direct copy, which is not atomic - acceptable only
-            // because a backup of the original already exists by this point.
+            // Some network and FUSE volumes refuse a rename over an open file,
+            // and a folder can refuse new files while the file itself is
+            // writable. A direct copy is not atomic, so it is only tried with a
+            // backup of the original in hand.
             if (!this.backupPath) throw err;
+        }
+
+        if (source === this.backupPath) {
+            // Revert: the source is the backup itself, which this cannot harm
             fs.copyFileSync(source, this.filePath);
-            if (settings.PreservePermissions) {
-                try { fs.chmodSync(this.filePath, this.mode); } catch (e) { /* best effort */ }
-            }
-            if (settings.PreserveDates) {
-                try { fs.utimesSync(this.filePath, this.atime, this.mtime); } catch (e) { /* best effort */ }
+        } else {
+            try {
+                fs.copyFileSync(source, this.filePath);
+            } catch (err) {
+                throw this.recoverOriginal(err);
             }
         }
+        this.applyMetadata(this.filePath, settings);
+    }
+
+    applyMetadata(target, settings) {
+        if (settings.PreservePermissions) {
+            try { fs.chmodSync(target, this.mode); } catch (err) { /* best effort */ }
+        }
+        if (settings.PreserveDates) {
+            try { fs.utimesSync(target, this.atime, this.mtime); } catch (err) { /* best effort */ }
+        }
+    }
+
+    // A direct copy over the original failed, possibly halfway. Puts the
+    // original back from its backup, or failing that makes sure the backup
+    // outlives the session: the session's temp copy is deleted on Clear and on
+    // quit. Returns the error to report, saying where the original is.
+    recoverOriginal(err) {
+        if (sameContent(this.filePath, this.backupPath)) {
+            return new Error(err.message); // never touched
+        }
+        try {
+            fs.copyFileSync(this.backupPath, this.filePath);
+            if (sameContent(this.filePath, this.backupPath)) {
+                return new Error(`${err.message} (the original was put back)`);
+            }
+        } catch (e) {
+            /* rescued below */
+        }
+
+        if (this.backupIsKept) {
+            return new Error(`${err.message}. The original is in the “ImageOptim originals” folder beside it.`);
+        }
+        for (const dir of [path.dirname(this.filePath), os.homedir()]) {
+            try {
+                const target = rescueName(dir, this.filePath);
+                if (!target) continue;
+                fs.copyFileSync(this.backupPath, target, fs.constants.COPYFILE_EXCL);
+                return new Error(`${err.message}. The original was saved as ${target}`);
+            } catch (e) {
+                /* try the next place */
+            }
+        }
+        this.backupPinned = true; // dropBackup() leaves it alone
+        return new Error(`${err.message}. The original is at ${this.backupPath} until ImageOptim quits.`);
     }
 
     // Refuses to write if the file changed while the optimizers were running.
@@ -736,22 +824,31 @@ class Job extends EventEmitter {
                 return { ok: false, reason: 'its copy in the ImageOptim originals folder is gone' };
             }
 
-            if (this.keptCreated) {
-                // Moved back whole, so the file gets its exact bytes and dates
-                // again, and the folder doesn't keep a copy nobody needs.
-                try {
-                    fs.renameSync(this.backupPath, this.filePath);
-                } catch (err) {
+            try {
+                if (this.keptCreated) {
+                    // Moved back whole, so the file gets its exact bytes and
+                    // dates again, and the folder doesn't keep a copy nobody
+                    // needs.
+                    try {
+                        renameWithRetry(this.backupPath, this.filePath);
+                    } catch (err) {
+                        this.replaceOriginal(this.backupPath, settings);
+                        unlinkQuietly(this.backupPath);
+                    }
+                    removeIfEmpty(path.dirname(this.backupPath));
+                } else {
+                    // The copy was there before this run, so it stays
                     this.replaceOriginal(this.backupPath, settings);
-                    unlinkQuietly(this.backupPath);
                 }
-                removeIfEmpty(path.dirname(this.backupPath));
-            } else {
-                // The copy was there before this run, so it stays
-                this.replaceOriginal(this.backupPath, settings);
+            } catch (err) {
+                return { ok: false, reason: `it could not be written (${err.message})` };
             }
         } else {
-            this.replaceOriginal(this.backupPath, settings);
+            try {
+                this.replaceOriginal(this.backupPath, settings);
+            } catch (err) {
+                return { ok: false, reason: `it could not be written (${err.message})` };
+            }
             unlinkQuietly(this.backupPath);
         }
         this.backupPath = null;
@@ -776,10 +873,10 @@ class Job extends EventEmitter {
     // Forgets the backup, deleting it only if it is the session's temp copy.
     // A kept original is never deleted.
     dropBackup() {
-        if (!this.backupIsKept) unlinkQuietly(this.backupPath);
+        if (!this.backupIsKept && !this.backupPinned) unlinkQuietly(this.backupPath);
         this.backupPath = null;
         this.backupIsKept = false;
     }
 }
 
-module.exports = { Job, isSmall, sweepTempDirs, releaseTempDir };
+module.exports = { Job, isSmall, sweepTempDirs, releaseTempDir, RENAME_RETRY };

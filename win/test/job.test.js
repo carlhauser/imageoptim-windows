@@ -165,3 +165,110 @@ test('percentOptimized measures against the first size seen, not the last', () =
     assert.strictEqual(job.percentOptimized, 0);
     assert.strictEqual(job.isOptimized, false);
 });
+
+// ------------------------------------------------- when the rename is refused
+//
+// Antivirus scanners, the search indexer, OneDrive and viewers hold a file
+// open for a moment after it changes, and Windows then refuses the rename.
+// These replace fs calls for one test at a time.
+
+const { RENAME_RETRY } = require('../lib/job');
+
+function withFs(overrides, fn) {
+    const saved = {};
+    for (const [name, impl] of Object.entries(overrides)) {
+        saved[name] = fs[name];
+        fs[name] = impl(saved[name]);
+    }
+    const delay = RENAME_RETRY.delayMs;
+    RENAME_RETRY.delayMs = 1;
+    try {
+        return fn();
+    } finally {
+        Object.assign(fs, saved);
+        RENAME_RETRY.delayMs = delay;
+    }
+}
+
+const fsError = (code) => Object.assign(new Error(`${code}: refused`), { code });
+
+test('save retries a rename the file was briefly locked for', () => {
+    const { job, file } = readyJob('locked.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2));
+    let renames = 0;
+    let directCopies = 0;
+    withFs({
+        renameSync: (real) => (from, to) => {
+            renames += 1;
+            if (renames <= 2) throw fsError('EBUSY');
+            return real(from, to);
+        },
+        copyFileSync: (real) => (from, to, mode) => {
+            if (to === file) directCopies += 1;
+            return real(from, to, mode);
+        },
+    }, () => job.save(DEFAULTS));
+
+    assert.strictEqual(renames, 3);
+    assert.strictEqual(directCopies, 0, 'the atomic rename got through, so no direct copy');
+    assert.ok(fs.readFileSync(file).every((b) => b === 2));
+    assert.deepStrictEqual(stray(), []);
+});
+
+test('save gives up on the rename after a few tries, and only for a lock', () => {
+    const { job, file } = readyJob('refused.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2));
+    let renames = 0;
+    withFs({
+        renameSync: () => () => { renames += 1; throw fsError('EPERM'); },
+    }, () => job.save(DEFAULTS));
+    assert.strictEqual(renames, RENAME_RETRY.attempts);
+    assert.ok(fs.readFileSync(file).every((b) => b === 2), 'the direct copy wrote the result');
+
+    const other = readyJob('refused-other.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2));
+    renames = 0;
+    withFs({
+        renameSync: () => () => { renames += 1; throw fsError('EXDEV'); },
+    }, () => other.job.save(DEFAULTS));
+    assert.strictEqual(renames, 1, 'not a lock, so no point waiting');
+});
+
+test('a direct copy that fails halfway puts the original back', () => {
+    const { job, file } = readyJob('half.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2));
+    assert.throws(() => withFs({
+        renameSync: () => () => { throw fsError('EPERM'); },
+        copyFileSync: (real) => (from, to, mode) => {
+            if (to === file && from !== job.backupPath) {
+                fs.writeFileSync(file, Buffer.alloc(10, 2)); // truncated
+                throw fsError('ENOSPC');
+            }
+            return real(from, to, mode);
+        },
+    }, () => job.save(DEFAULTS)), /put back/);
+
+    const now = fs.readFileSync(file);
+    assert.strictEqual(now.length, 1000);
+    assert.ok(now.every((b) => b === 1), 'the original bytes, whole');
+});
+
+test('if the original cannot be put back either, its backup is saved beside it', () => {
+    const { job, file } = readyJob('rescue.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2));
+    let message = '';
+    try {
+        withFs({
+            renameSync: () => () => { throw fsError('EPERM'); },
+            copyFileSync: (real) => (from, to, mode) => {
+                if (to === file) {
+                    fs.writeFileSync(file, Buffer.alloc(10, 2));
+                    throw fsError('EIO');
+                }
+                return real(from, to, mode);
+            },
+        }, () => job.save(DEFAULTS));
+    } catch (err) {
+        message = err.message;
+    }
+    const rescued = path.join(path.dirname(file), 'rescue (ImageOptim backup).png');
+    assert.ok(message.includes(rescued), message);
+    assert.ok(fs.readFileSync(rescued).every((b) => b === 1), 'the untouched original');
+    job.cleanup();
+    assert.ok(fs.existsSync(rescued), 'cleanup never removes the rescued copy');
+});
