@@ -1,12 +1,16 @@
 # Builds the optimizers from source on a Windows runner with build-windows.ps1,
-# then packages the app around them.
+# then packages the app around them and checks the packaged app works.
 #
-# Runs only when the Windows code changes, not on every push. The from-source
-# build compiles MozJPEG, libpng, Guetzli, libwebp, AOM, libavif and three Rust
-# crates, and Windows runners bill at twice the rate of Linux ones.
+# Runs only when the Windows code or an optimizer's source changes, not on
+# every push. The from-source build compiles MozJPEG, libpng, Guetzli, libwebp,
+# AOM, libavif and three Rust crates, and Windows runners bill at twice the
+# rate of Linux ones; a build whose sources are unchanged reuses the last one.
 #
 # Pushing a tag v<version> also publishes the result as a GitHub Release, which
 # is what the app's built-in updater reads (see the release job at the end).
+#
+# Actions are pinned to the commit behind their tag, so a moved tag cannot
+# change what runs here; Dependabot proposes the updates.
 
 name: Windows build
 
@@ -30,6 +34,24 @@ on:
       - 'build-windows.ps1'
       - 'win/**'
       - '.github/workflows/windows.yml'
+      # The optimizers' own sources: an update to one used to be built for
+      # the first time when a release was tagged
+      - 'advpng/**'
+      - 'aom/**'
+      - 'gifsicle/**'
+      - 'guetzli/**'
+      - 'jpegoptim/**'
+      - 'libavif/**'
+      - 'libjpeg/**'
+      - 'libpng/**'
+      - 'libwebp/**'
+      - 'oxipng/**'
+      - 'pngcrush/**'
+      - 'pngquant/**'
+      - 'svgcleaner/**'
+      - 'svgo/**'
+      - 'zlib/**'
+      - 'zopfli-png/**'
       # Documentation changes should not start a Windows runner
       - '!win/**.md'
 
@@ -40,7 +62,9 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       # Before ninety minutes of compiling rather than after: the updater
       # compares versions from latest.yml, which comes from package.json, so a
@@ -54,7 +78,21 @@ jobs:
             throw "Tag $env:GITHUB_REF_NAME does not match version $version in win/package.json"
           }
 
+      # Optimizers built from exactly these sources and this script, by an
+      # earlier run. A release is always built from scratch: nothing it ships
+      # comes out of a cache another run could have written.
+      - name: Restore optimizers built from these sources
+        id: bin-cache
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            win/resources/bin
+            win/resources/svgo.js
+          key: optimizers-win-x64-r1-${{ hashFiles('build-windows.ps1', 'advpng/**', 'aom/**', 'gifsicle/**', 'guetzli/**', 'jpegoptim/**', 'libavif/**', 'libjpeg/**', 'libpng/**', 'libwebp/**', 'oxipng/**', 'pngcrush/**', 'pngquant/**', 'svgcleaner/**', 'svgo/**', 'zlib/**', 'zopfli-png/**') }}
+
       - name: Show what the runner already has
+        if: steps.bin-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           Write-Host "MSYS2 at C:\msys64: $(Test-Path 'C:\msys64\usr\bin\bash.exe')"
@@ -65,14 +103,16 @@ jobs:
           }
 
       # A current cargo, so the Rust tools are not left to whatever MSYS2 ships.
-      # Third-party, so pinned to a commit. Off its stable branch the action
-      # cannot infer the toolchain from the ref, so it is named.
+      # Off its stable branch the action cannot infer the toolchain from the
+      # ref, so it is named.
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        if: steps.bin-cache.outputs.cache-hit != 'true'
         with:
           toolchain: stable
           targets: x86_64-pc-windows-gnu
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        if: steps.bin-cache.outputs.cache-hit != 'true'
         with:
           node-version: 24
 
@@ -83,24 +123,45 @@ jobs:
       # linked. A stale hit is never saved over, though, so r1 is bumped whenever
       # $AomFlags in build-windows.ps1 changes. Restore and save are separate
       # steps so that the library is saved even when some other optimizer fails
-      # the build step.
+      # the build step. Not for a release, as above.
       - name: Restore the AOM library
         id: aom-cache
-        uses: actions/cache/restore@v5
+        if: ${{ steps.bin-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .build-win/aom-prefix
           key: aom-prefix-win-x64-r1-${{ hashFiles('aom/**') }}
 
       - name: Build the optimizers
+        if: steps.bin-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: .\build-windows.ps1
 
+      # What the build used, for when an unpinned MSYS2 package changes a result
+      - name: Record the toolchain
+        if: ${{ !cancelled() && steps.bin-cache.outputs.cache-hit != 'true' }}
+        shell: pwsh
+        run: |
+          & C:\msys64\usr\bin\bash.exe -lc 'pacman -Q | grep -E "mingw-w64-x86_64-(gcc|cmake|nasm|libpng|zlib|rust)"' 2>&1
+          rustc -V
+          cargo -V
+
       - name: Save the AOM library
-        if: ${{ !cancelled() && steps.aom-cache.outputs.cache-hit != 'true' && hashFiles('.build-win/aom-prefix/lib/libaom.a') != '' }}
-        uses: actions/cache/save@v5
+        if: ${{ !cancelled() && !startsWith(github.ref, 'refs/tags/') && steps.bin-cache.outputs.cache-hit != 'true' && steps.aom-cache.outputs.cache-hit != 'true' && hashFiles('.build-win/aom-prefix/lib/libaom.a') != '' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .build-win/aom-prefix
           key: aom-prefix-win-x64-r1-${{ hashFiles('aom/**') }}
+
+      # Only a complete build is kept for later runs
+      - name: Save the optimizers
+        if: ${{ success() && !startsWith(github.ref, 'refs/tags/') && steps.bin-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            win/resources/bin
+            win/resources/svgo.js
+          key: optimizers-win-x64-r1-${{ hashFiles('build-windows.ps1', 'advpng/**', 'aom/**', 'gifsicle/**', 'guetzli/**', 'jpegoptim/**', 'libavif/**', 'libjpeg/**', 'libpng/**', 'libwebp/**', 'oxipng/**', 'pngcrush/**', 'pngquant/**', 'svgcleaner/**', 'svgo/**', 'zlib/**', 'zopfli-png/**') }}
 
       # Wanted even on a partial build: the summary says which tools failed, and
       # the app runs with whatever did build.
@@ -109,7 +170,7 @@ jobs:
       # at all - silently, since a missing optimizer is simply skipped.
       - name: Upload the built optimizers
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: optimizers-win-x64
           path: |
@@ -125,19 +186,31 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: win/package-lock.json
 
+      # Electron itself and electron-builder's tools, about 150 MB fetched on
+      # every run otherwise
+      - name: Restore Electron's downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-win-x64-${{ hashFiles('win/package-lock.json') }}
+
       # The build script exits non-zero when any single optimizer fails, but the
       # app runs with whatever did build, so packaging should still be attempted.
       - name: Collect the optimizers built in the previous job
         continue-on-error: true
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: optimizers-win-x64
           path: win/resources/
@@ -160,6 +233,13 @@ jobs:
         working-directory: win
         run: npm ci
 
+      # Only what ships: the packages the installed app loads
+      - name: Check the shipped dependencies for known vulnerabilities
+        working-directory: win
+        run: |
+          npm audit --omit=dev
+          npm audit signatures
+
       # The strongest form of the argument tests: the flags are checked against
       # the executables this run just compiled, so a tool that renamed or
       # dropped an option fails the build rather than quietly optimizing
@@ -179,8 +259,10 @@ jobs:
           echo "$counts" | grep -qE 'tests [1-9]' \
             || { echo '::error::no tests ran'; exit 1; }
           # A skip here means IMAGEOPTIM_BIN did not resolve, leaving the
-          # arguments unverified against the real executables.
-          if echo "$counts" | grep -qE 'skipped [1-9]'; then
+          # arguments unverified against the real executables. The one test
+          # that needs a packaged build is allowed: there is none yet.
+          skipped=$(echo "$counts" | grep -oE 'skipped [0-9]+' | grep -oE '[0-9]+' | tail -1)
+          if [ "${skipped:-0}" -gt 1 ]; then
             echo '::error::tests were skipped; the optimizers were not found'
             exit 1
           fi
@@ -192,12 +274,53 @@ jobs:
         working-directory: win
         run: npm run dist:win
 
+      # The two broken releases this port has had - no SVGO, and optimizers
+      # that needed DLLs nobody shipped - built and packaged without a hitch.
+      # This runs what was packaged: one image of each format must come out
+      # smaller and whole, with SVGO from inside app.asar.
+      - name: Check the packaged app
+        working-directory: win
+        shell: pwsh
+        run: |
+          npx --no-install @electron/fuses read --app dist/win-unpacked/ImageOptim.exe
+          $fuses = npx --no-install @electron/fuses read --app dist/win-unpacked/ImageOptim.exe | Out-String
+          foreach ($off in 'RunAsNode', 'EnableNodeOptionsEnvironmentVariable', 'EnableNodeCliInspectArguments') {
+            if ($fuses -notmatch "$off is Disabled") { throw "$off is not disabled" }
+          }
+          foreach ($on in 'EnableEmbeddedAsarIntegrityValidation', 'OnlyLoadAppFromAsar') {
+            if ($fuses -notmatch "$on is Enabled") { throw "$on is not enabled" }
+          }
+          $asar = npx --no-install @electron/asar list dist/win-unpacked/resources/app.asar | Out-String
+          if ($asar -notmatch 'resources[\\/]svgo\.js') { throw 'svgo.js is not inside app.asar' }
+          if (-not (Select-String -Path dist/win-unpacked/resources/app-update.yml -Pattern 'provider: github' -Quiet)) {
+            throw 'app-update.yml does not name the GitHub provider'
+          }
+          node scripts/smoke.mjs dist/win-unpacked/ImageOptim.exe
+          if ($LASTEXITCODE -ne 0) { throw 'the packaged app did not optimize its test images' }
+
+      # The installer as users run it: silently, per user, then the same
+      # images through the installed copy, then uninstalled again
+      - name: Install, run and uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem win/dist/ImageOptim-Setup-*.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\ImageOptim'
+          $exe = Join-Path $dir 'ImageOptim.exe'
+          if (-not (Test-Path $exe)) { throw "the installer did not put ImageOptim.exe in $dir" }
+          node win/scripts/smoke.mjs $exe
+          if ($LASTEXITCODE -ne 0) { throw 'the installed app did not optimize its test images' }
+          Start-Process (Join-Path $dir 'Uninstall ImageOptim.exe') -ArgumentList '/S' -Wait
+          # The uninstaller hands over to a copy of itself and returns at once
+          for ($i = 0; $i -lt 60 -and (Test-Path $exe); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path $exe) { throw 'the uninstaller left ImageOptim.exe behind' }
+
       # latest.yml and the installer's .blockmap are what the updater reads -
       # the version and checksum, and the block hashes for a differential
       # download.
       - name: Upload the installer and portable zip
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: imageoptim-windows
           path: |
@@ -222,12 +345,18 @@ jobs:
       needs.optimizers.result == 'success' &&
       needs.package.result == 'success'
     timeout-minutes: 15
+    # Whatever is published here reaches every installed copy on its next
+    # start. The environment's protection rules - a required reviewer, set in
+    # the repository's settings - decide who may let a release through.
+    environment: release
     permissions:
       contents: write
+      id-token: write      # for the provenance attestation
+      attestations: write
 
     steps:
       - name: Collect the installer
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: imageoptim-windows
           path: dist
@@ -249,14 +378,33 @@ jobs:
             test -f "dist/$name" || { echo "::error::latest.yml names $name, which was not built"; exit 1; }
           done
 
-      # Re-running the workflow for a tag replaces the assets of its release
-      # rather than failing because the release already exists.
-      #
+      # Checksums anyone can compare a download with, and a signed statement,
+      # kept by GitHub, that these exact files came out of this workflow at
+      # this commit: `gh attestation verify <file> --repo <owner>/<repo>`.
+      - name: Write checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum "ImageOptim-Setup-${GITHUB_REF_NAME#v}.exe" "ImageOptim-${GITHUB_REF_NAME#v}-win.zip" latest.yml > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Attest where the files came from
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            dist/*.exe
+            dist/*.zip
+            dist/latest.yml
+
       # GitHub's release API fails now and then on its own: one release took
       # four attempts through an incident, failing with a 502 on publishing and
       # then a 404 uploading to the draft it had just created. So each attempt
       # is retried with a growing pause, and a draft an attempt left behind is
       # completed and published rather than duplicated.
+      #
+      # A release that is already published is never touched again: replacing
+      # its installer would hand installed copies different bytes under the
+      # same version. A bad release is fixed with a new version.
       - name: Publish the GitHub release
         shell: bash
         env:
@@ -270,14 +418,19 @@ jobs:
             "dist/ImageOptim-Setup-$version.exe.blockmap"
             "dist/latest.yml"
             "dist/ImageOptim-$version-win.zip"
+            "dist/SHA256SUMS.txt"
           )
+          if [ "$(gh release view "$tag" --repo "$repo" --json isDraft --jq .isDraft 2> /dev/null)" = "false" ]; then
+            echo "::error::$tag is already published; publish a new version instead"
+            exit 1
+          fi
           publish() {
             local draft
             if draft=$(gh release view "$tag" --repo "$repo" --json isDraft --jq .isDraft 2> /dev/null); then
+              [ "$draft" = "true" ] || return 0
+              # A draft only this workflow has seen: its files can be replaced
               gh release upload "$tag" "${files[@]}" --repo "$repo" --clobber || return 1
-              if [ "$draft" = "true" ]; then
-                gh release edit "$tag" --repo "$repo" --draft=false || return 1
-              fi
+              gh release edit "$tag" --repo "$repo" --draft=false || return 1
             else
               gh release create "$tag" "${files[@]}" --repo "$repo" \
                 --title "ImageOptim $version" --generate-notes --verify-tag

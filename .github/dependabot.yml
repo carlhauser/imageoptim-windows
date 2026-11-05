@@ -1,0 +1,26 @@
+# Proposes updates as pull requests: the actions the workflows pin by commit,
+# and the npm packages the app and the SVGO bundle are built from. Electron
+# and its packaging tools move together, so they come as one pull request.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /win
+    schedule:
+      interval: weekly
+    groups:
+      electron:
+        patterns: ['electron', 'electron-builder', 'electron-updater']
+
+  - package-ecosystem: npm
+    directory: /svgo
+    schedule:
+      interval: monthly
