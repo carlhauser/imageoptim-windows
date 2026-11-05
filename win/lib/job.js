@@ -150,6 +150,8 @@ class Job extends EventEmitter {
     constructor(filePath, options) {
         super();
         this.filePath = filePath;
+        // How the queue and the window know this file (lib/queue.js fileKey)
+        this.id = options.id || filePath;
         this.name = path.basename(filePath);
         this.resolveTool = options.resolveTool;
         this.semaphore = options.semaphore;
@@ -266,7 +268,7 @@ class Job extends EventEmitter {
 
     toJSON() {
         return {
-            id: this.filePath,
+            id: this.id,
             name: this.name,
             path: this.filePath,
             type: this.type,
@@ -518,9 +520,12 @@ class Job extends EventEmitter {
         try {
             stat = fs.statSync(this.filePath);
             const fd = fs.openSync(this.filePath, 'r');
-            header = Buffer.alloc(Math.min(HEADER_BYTES, stat.size));
-            fs.readSync(fd, header, 0, header.length, 0);
-            fs.closeSync(fd);
+            try {
+                header = Buffer.alloc(Math.min(HEADER_BYTES, stat.size));
+                fs.readSync(fd, header, 0, header.length, 0);
+            } finally {
+                fs.closeSync(fd); // a failed read must not keep the file open
+            }
             currentSize = stat.size;
             this.mode = stat.mode;
             this.mtime = stat.mtime;

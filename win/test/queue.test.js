@@ -173,3 +173,122 @@ test('stats() reports the batch, its time left and each row\'s progress', async 
         Job.prototype.run = realRun;
     }
 });
+
+// ------------------------------------------------ removing what is running
+
+// A queue whose jobs wait in run() until the test lets them finish
+function heldQueue(name) {
+    const { Job } = require('../lib/job');
+    const settings = new Settings(path.join(scratch(), `${name}.json`));
+    settings.reset();
+    const queue = new Queue({ settings, binDir: path.join(scratch(), 'nobin') });
+    const finishers = [];
+    const realRun = Job.prototype.run;
+    Job.prototype.run = function run() {
+        this.isRunning = true;
+        this.setState('running');
+        return new Promise((resolve) => finishers.push(() => {
+            this.isRunning = false;
+            this.setState('done');
+            resolve();
+        }));
+    };
+    const restore = () => { Job.prototype.run = realRun; };
+    return { queue, finishers, restore };
+}
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test('a running job taken out of the list sends nothing more, and is cleaned up once it stops', async () => {
+    const root = tree('ghost', (r) => fs.writeFileSync(path.join(r, 'a.svg'), '<svg/>'.repeat(20)));
+    const { queue, finishers, restore } = heldQueue('ghost');
+    try {
+        await queue.add([root]);
+        const [job] = queue.jobs.values();
+        const backup = path.join(scratch(), 'ghost-backup.temp');
+        fs.writeFileSync(backup, 'backup');
+        job.backupPath = backup;
+
+        const events = [];
+        queue.on('job', (snapshot) => events.push(snapshot));
+        queue.remove([job.id]);
+        assert.ok(fs.existsSync(backup), 'not deleted while the job still runs');
+
+        finishers.shift()();
+        await settle();
+        assert.deepStrictEqual(events, [], 'no event to bring the row back');
+        assert.ok(!fs.existsSync(backup), 'cleaned up once it settled');
+        assert.strictEqual(queue.running, 0);
+    } finally {
+        restore();
+    }
+});
+
+test('clear defers a running job\'s cleanup the same way', async () => {
+    const root = tree('clear-run', (r) => fs.writeFileSync(path.join(r, 'a.svg'), '<svg/>'.repeat(20)));
+    const { queue, finishers, restore } = heldQueue('clear-run');
+    try {
+        await queue.add([root]);
+        const [job] = queue.jobs.values();
+        const backup = path.join(scratch(), 'clear-backup.temp');
+        fs.writeFileSync(backup, 'backup');
+        job.backupPath = backup;
+        queue.clear();
+        assert.strictEqual(queue.jobs.size, 0);
+        assert.ok(fs.existsSync(backup));
+        finishers.shift()();
+        await settle();
+        assert.ok(!fs.existsSync(backup));
+    } finally {
+        restore();
+    }
+});
+
+test('revert is refused while a file is being optimized', async () => {
+    const root = tree('revert-run', (r) => fs.writeFileSync(path.join(r, 'a.svg'), '<svg/>'.repeat(20)));
+    const { queue, finishers, restore } = heldQueue('revert-run');
+    try {
+        await queue.add([root]);
+        const [job] = queue.jobs.values();
+        const result = queue.revert(job.id);
+        assert.strictEqual(result.ok, false);
+        assert.match(result.reason, /being optimized/);
+        finishers.shift()();
+        await settle();
+    } finally {
+        restore();
+    }
+});
+
+test('one file under two spellings is one job', { skip: process.platform !== 'win32' && 'NTFS only' }, async () => {
+    const root = tree('spelling', (r) => fs.writeFileSync(path.join(r, 'Photo.png'), 'x'.repeat(100)));
+    const settings = new Settings(path.join(scratch(), 'spelling.json'));
+    settings.reset();
+    const queue = new Queue({ settings, binDir: path.join(scratch(), 'nobin') });
+    queue.start = () => {};
+    await queue.add([path.join(root, 'Photo.png')]);
+    await queue.add([path.join(root.toUpperCase(), 'PHOTO.PNG')]);
+    assert.strictEqual(queue.jobs.size, 1);
+    assert.strictEqual(queue.pending.length, 1);
+    assert.ok(queue.find(path.join(root, 'photo.png')));
+});
+
+test('a file that could not be opened is looked at again when dropped again', async () => {
+    const root = tree('reopen', () => {});
+    const file = path.join(root, 'late.png');
+    const settings = new Settings(path.join(scratch(), 'reopen.json'));
+    settings.reset();
+    const queue = new Queue({ settings, binDir: path.join(scratch(), 'nobin') });
+    queue.start = () => {};
+    // Unreadable the first time: expandPaths only returns what exists, so
+    // the job is made the way a vanished file leaves it
+    fs.writeFileSync(file, 'x'.repeat(100));
+    await queue.add([file]);
+    const job = queue.find(file);
+    queue.pending.length = 0;
+    job.unreadable = true;
+    job.setState('error', 'Can’t open the file');
+
+    await queue.add([file]);
+    assert.strictEqual(job.unreadable, false);
+    assert.strictEqual(queue.pending.length, 1, 'queued this time');
+});

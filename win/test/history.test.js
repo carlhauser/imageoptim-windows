@@ -259,7 +259,7 @@ test('queue — a known, unchanged file goes straight to Done', async () => {
     const queue = new Queue({ settings: settingsWith(), binDir: path.join(scratch(), 'nobin'), history });
     queue.start = () => {};
     await queue.add([dir]);
-    assert.strictEqual(queue.jobs.get(path.join(dir, 'known.svg')).state, 'skipped');
+    assert.strictEqual(queue.find(path.join(dir, 'known.svg')).state, 'skipped');
     assert.deepStrictEqual(queue.pending.map((j) => j.name), ['new.svg']);
 });
 

@@ -59,6 +59,20 @@ function makeResolver(binDir) {
     };
 }
 
+// What identifies a file in the list. Two spellings of one file must not
+// become two jobs racing to overwrite it, and NTFS ignores case, while 8.3
+// short names, junctions, subst drives and mapped drives all give one file
+// other names. The resolved path is used, in lower case on Windows.
+function fileKey(filePath) {
+    let real = path.resolve(filePath);
+    try {
+        real = fs.realpathSync.native(real);
+    } catch (err) {
+        /* gone or unreadable: its literal path will do */
+    }
+    return process.platform === 'win32' ? real.toLowerCase() : real;
+}
+
 // Port of DirScanner.m: dropping a folder queues every image inside it.
 //
 // Asynchronous, because this runs inside the main process and a synchronous walk
@@ -140,7 +154,22 @@ class Queue extends EventEmitter {
     enqueue(job) {
         this.pending.push(job);
         job.setState('queued');
-        this.batch.enqueue(job.filePath, job.costClass(this.settings.all()), job.bestSize || job.originalSize);
+        this.batch.enqueue(job.id, job.costClass(this.settings.all()), job.bestSize || job.originalSize);
+    }
+
+    // The job for a file, however its path is spelled
+    find(filePath) {
+        return this.jobs.get(fileKey(filePath)) || null;
+    }
+
+    // Takes a job out of the list. Its events stop at once - a run still
+    // finishing would otherwise put its row back - and a running job's temp
+    // files are cleaned up when its run settles (see pump), since deleting them
+    // under it could race with what it is still doing.
+    discard(job) {
+        job.removeAllListeners('change');
+        this.jobs.delete(job.id);
+        if (!job.isRunning) job.cleanup();
     }
 
     // Reports which optimizers are actually present, for the UI to show.
@@ -172,16 +201,19 @@ class Queue extends EventEmitter {
         const added = [];
 
         for (const filePath of files) {
-            let job = this.jobs.get(filePath);
-            if (!job) {
+            const id = fileKey(filePath);
+            let job = this.jobs.get(id);
+            const isNew = !job;
+            if (isNew) {
                 job = new Job(filePath, {
+                    id,
                     resolveTool: this.resolveTool,
                     semaphore: this.semaphore,
-                    estimate: (estimated) => this.batch.jobFraction(estimated.filePath),
+                    estimate: (estimated) => this.batch.jobFraction(estimated.id),
                     history: this.history,
                 });
                 job.on('change', (snapshot) => this.emit('job', snapshot));
-                this.jobs.set(filePath, job);
+                this.jobs.set(id, job);
                 if (isInOriginals(filePath)) {
                     // Dropped in directly, or a whole originals folder dropped:
                     // shown, so it's clear why nothing happened to it
@@ -191,6 +223,10 @@ class Queue extends EventEmitter {
                     added.push(job);
                     continue;
                 }
+            }
+            // A new file, or one that could not be opened before and is
+            // dropped again - it may have been unlocked or come back since
+            if (isNew || (job.unreadable && !job.blocked)) {
                 try {
                     job.originalSize = fs.statSync(filePath).size;
                     job.bestSize = job.originalSize;
@@ -275,21 +311,27 @@ class Queue extends EventEmitter {
             // single row can be cancelled - by removing it - without stopping
             // everything else.
             const perJob = new AbortController();
-            this.controllers.set(job.filePath, perJob);
+            this.controllers.set(job.id, perJob);
             const signal = AbortSignal.any([this.controller.signal, perJob.signal]);
 
-            this.batch.started(job.filePath);
+            this.batch.started(job.id);
 
             job.run(this.settings.all(), signal)
                 .catch((err) => job.setState('error', err.message))
                 .finally(() => {
-                    this.controllers.delete(job.filePath);
+                    // The same file may have been removed and added again while
+                    // this ran, and then the id belongs to its new job
+                    if (this.controllers.get(job.id) === perJob) this.controllers.delete(job.id);
                     this.running -= 1;
-                    this.batch.finished(job.filePath, {
-                        learn: job.state === 'done' && job.toolsTotal > 0 && !signal.aborted,
-                        cls: job.costClassName,
-                        bytes: job.costBytes,
-                    });
+                    if (this.jobs.get(job.id) === job) {
+                        this.batch.finished(job.id, {
+                            learn: job.state === 'done' && job.toolsTotal > 0 && !signal.aborted,
+                            cls: job.costClassName,
+                            bytes: job.costBytes,
+                        });
+                    } else {
+                        job.cleanup(); // removed or cleared while it ran
+                    }
                     if (!this.pending.length && this.running === 0) this.batch.end();
                     this.emit('progress', this.stats());
                     if (this.pending.length) {
@@ -316,14 +358,14 @@ class Queue extends EventEmitter {
 
     clear() {
         this.stop();
-        // cleanup() now also removes the backup copy of each original, which
-        // used to be left in the temp directory forever.
-        for (const job of this.jobs.values()) job.cleanup();
-        this.jobs.clear();
+        // discard() also removes the backup copy of each original, which used
+        // to be left in the temp directory forever.
+        for (const job of [...this.jobs.values()]) this.discard(job);
         this.emit('progress', this.stats());
     }
 
     remove(ids) {
+        const removed = new Set();
         for (const id of ids) {
             const job = this.jobs.get(id);
             if (!job) continue;
@@ -332,11 +374,11 @@ class Queue extends EventEmitter {
             // taken out of the list.
             const controller = this.controllers.get(id);
             if (controller) controller.abort();
-            this.pending = this.pending.filter((pendingJob) => pendingJob !== job);
+            removed.add(job);
             this.batch.drop(id);
-            this.jobs.delete(id);
-            if (!job.isRunning) job.cleanup();
+            this.discard(job);
         }
+        if (removed.size) this.pending = this.pending.filter((job) => !removed.has(job));
         this.emit('progress', this.stats());
     }
 
@@ -355,6 +397,11 @@ class Queue extends EventEmitter {
     revert(id) {
         const job = this.jobs.get(id);
         if (!job) return { ok: false, reason: 'that file is no longer in the list' };
+        // A run in progress would finish by marking the file done and
+        // overwrite "reverted", and a queued one would optimize it again
+        if (job.isRunning || this.pending.includes(job)) {
+            return { ok: false, reason: 'it is being optimized; stop it first' };
+        }
         return job.revert(this.settings.all());
     }
 
@@ -408,4 +455,4 @@ class Queue extends EventEmitter {
     }
 }
 
-module.exports = { Queue, expandPaths, makeResolver };
+module.exports = { Queue, expandPaths, makeResolver, fileKey };

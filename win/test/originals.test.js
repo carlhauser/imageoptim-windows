@@ -214,7 +214,7 @@ test('a file inside an originals folder is listed, refused, and Again leaves it'
     const queue = new Queue({ settings, binDir: path.join(scratch(), 'nobin') });
     queue.start = () => {};
     await queue.add([kept]);
-    const job = queue.jobs.get(kept);
+    const job = queue.find(kept);
     assert.strictEqual(job.state, 'error');
     assert.match(job.error, /ImageOptim originals/);
     assert.strictEqual(queue.pending.length, 0);

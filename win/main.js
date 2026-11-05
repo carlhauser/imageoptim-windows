@@ -239,16 +239,20 @@ function registerIpc() {
     ipcMain.handle('queue:snapshot', () => ({ jobs: queue.snapshot(), stats: queue.stats() }));
 
     ipcMain.handle('jobs:remove', (event, ids) => { queue.remove(ids || []); return queue.snapshot(); });
+    // Ids are the queue's keys, not paths to act on: only a file in the list
+    // is ever shown or restored
     ipcMain.handle('job:reveal', (event, id) => {
-        if (fs.existsSync(id)) shell.showItemInFolder(id);
+        const job = queue.jobs.get(id);
+        if (job && fs.existsSync(job.filePath)) shell.showItemInFolder(job.filePath);
     });
     ipcMain.handle('job:revert', (event, id) => {
+        const job = queue.jobs.get(id);
         const result = queue.revert(id);
         if (!result.ok && mainWindow) {
             dialog.showMessageBox(mainWindow, {
                 type: 'warning',
                 message: 'That file was not restored',
-                detail: `${path.basename(id)} could not be put back because ${result.reason}.`,
+                detail: `${job ? job.name : 'The file'} could not be put back because ${result.reason}.`,
                 buttons: ['OK'],
             });
         }
