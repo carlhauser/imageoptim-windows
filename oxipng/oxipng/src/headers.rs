@@ -1,13 +1,14 @@
-use crate::colors::{BitDepth, ColorType};
-use crate::deflate::{crc32, inflate};
-use crate::error::PngError;
-use crate::interlace::Interlacing;
-use crate::AtomicMin;
-use crate::Deflaters;
-use crate::PngResult;
 use indexmap::IndexSet;
-use log::warn;
+use log::{debug, trace, warn};
 use rgb::{RGB16, RGBA8};
+
+use crate::{
+    Deflater, Options, PngResult,
+    colors::{BitDepth, ColorType},
+    deflate::{crc32, inflate},
+    display_chunks::DISPLAY_CHUNKS,
+    error::PngError,
+};
 
 #[derive(Debug, Clone)]
 /// Headers from the IHDR chunk of the image
@@ -20,32 +21,30 @@ pub struct IhdrData {
     pub color_type: ColorType,
     /// The bit depth of the image
     pub bit_depth: BitDepth,
-    /// The interlacing mode of the image
-    pub interlaced: Interlacing,
+    /// Whether the image is interlaced
+    pub interlaced: bool,
 }
 
 impl IhdrData {
     /// Bits per pixel
     #[must_use]
     #[inline]
-    pub fn bpp(&self) -> usize {
+    pub const fn bpp(&self) -> usize {
         self.bit_depth as usize * self.color_type.channels_per_pixel() as usize
     }
 
     /// Byte length of IDAT that is correct for this IHDR
     #[must_use]
-    pub fn raw_data_size(&self) -> usize {
+    pub const fn raw_data_size(&self) -> usize {
         let w = self.width as usize;
         let h = self.height as usize;
         let bpp = self.bpp();
 
-        fn bitmap_size(bpp: usize, w: usize, h: usize) -> usize {
-            ((w * bpp + 7) / 8) * h
+        const fn bitmap_size(bpp: usize, w: usize, h: usize) -> usize {
+            (w * bpp).div_ceil(8) * h
         }
 
-        if self.interlaced == Interlacing::None {
-            bitmap_size(bpp, w, h) + h
-        } else {
+        if self.interlaced {
             let mut size = bitmap_size(bpp, (w + 7) >> 3, (h + 7) >> 3) + ((h + 7) >> 3);
             if w > 4 {
                 size += bitmap_size(bpp, (w + 3) >> 3, (h + 7) >> 3) + ((h + 7) >> 3);
@@ -59,6 +58,8 @@ impl IhdrData {
                 size += bitmap_size(bpp, w >> 1, (h + 1) >> 1) + ((h + 1) >> 1);
             }
             size + bitmap_size(bpp, w, h >> 1) + (h >> 1)
+        } else {
+            bitmap_size(bpp, w, h) + h
         }
     }
 }
@@ -68,15 +69,20 @@ pub struct Chunk {
     pub name: [u8; 4],
     pub data: Vec<u8>,
 }
+impl Chunk {
+    const REDUCTION_CONFLICTS: [[u8; 4]; 3] = [*b"bKGD", *b"sBIT", *b"hIST"];
+}
 
+/// [`Options`][crate::Options] to use when stripping chunks (metadata)
 #[derive(Debug, PartialEq, Eq, Clone)]
-/// Options to use when stripping chunks
 pub enum StripChunks {
     /// None
+    ///
+    /// ...except caBX chunk if it contains a C2PA.org signature.
     None,
     /// Remove specific chunks
     Strip(IndexSet<[u8; 4]>),
-    /// Remove all chunks that won't affect rendering
+    /// Remove all chunks that won't affect image display
     Safe,
     /// Remove all non-critical chunks except these
     Keep(IndexSet<[u8; 4]>),
@@ -85,18 +91,13 @@ pub enum StripChunks {
 }
 
 impl StripChunks {
-    /// List of chunks that will be kept when using the `Safe` option
-    pub const KEEP_SAFE: [[u8; 4]; 7] = [
-        *b"cICP", *b"iCCP", *b"sRGB", *b"pHYs", *b"acTL", *b"fcTL", *b"fdAT",
-    ];
-
     pub(crate) fn keep(&self, name: &[u8; 4]) -> bool {
         match &self {
-            StripChunks::None => true,
-            StripChunks::Keep(names) => names.contains(name),
-            StripChunks::Strip(names) => !names.contains(name),
-            StripChunks::Safe => Self::KEEP_SAFE.contains(name),
-            StripChunks::All => false,
+            Self::None => true,
+            Self::Keep(names) => names.contains(name),
+            Self::Strip(names) => !names.contains(name),
+            Self::Safe => DISPLAY_CHUNKS.contains(name),
+            Self::All => false,
         }
     }
 }
@@ -124,37 +125,27 @@ pub fn parse_next_chunk<'a>(
             .get(*byte_offset..*byte_offset + 4)
             .ok_or(PngError::TruncatedData)?,
     );
+    if byte_data.len() < *byte_offset + 12 + length as usize {
+        return Err(PngError::TruncatedData);
+    }
     *byte_offset += 4;
 
     let chunk_start = *byte_offset;
-    let chunk_name = byte_data
-        .get(chunk_start..chunk_start + 4)
-        .ok_or(PngError::TruncatedData)?;
+    let chunk_name = &byte_data[chunk_start..chunk_start + 4];
     if chunk_name == b"IEND" {
         // End of data
         return Ok(None);
     }
     *byte_offset += 4;
 
-    let data = byte_data
-        .get(*byte_offset..*byte_offset + length as usize)
-        .ok_or(PngError::TruncatedData)?;
+    let data = &byte_data[*byte_offset..*byte_offset + length as usize];
     *byte_offset += length as usize;
-    let crc = read_be_u32(
-        byte_data
-            .get(*byte_offset..*byte_offset + 4)
-            .ok_or(PngError::TruncatedData)?,
-    );
+    let crc = read_be_u32(&byte_data[*byte_offset..*byte_offset + 4]);
     *byte_offset += 4;
 
-    let chunk_bytes = byte_data
-        .get(chunk_start..chunk_start + 4 + length as usize)
-        .ok_or(PngError::TruncatedData)?;
+    let chunk_bytes = &byte_data[chunk_start..chunk_start + 4 + length as usize];
     if !fix_errors && crc32(chunk_bytes) != crc {
-        return Err(PngError::new(&format!(
-            "CRC Mismatch in {} chunk; May be recoverable by using --fix",
-            String::from_utf8_lossy(chunk_name)
-        )));
+        return Err(PngError::CRCMismatch(chunk_name.try_into().unwrap()));
     }
 
     let name: [u8; 4] = chunk_name.try_into().unwrap();
@@ -173,13 +164,13 @@ pub fn parse_ihdr_chunk(
             0 => ColorType::Grayscale {
                 transparent_shade: trns_data
                     .filter(|t| t.len() >= 2)
-                    .map(|t| u16::from_be_bytes([t[0], t[1]])),
+                    .map(|t| read_be_u16(&t[0..2])),
             },
             2 => ColorType::RGB {
                 transparent_color: trns_data.filter(|t| t.len() >= 6).map(|t| RGB16 {
-                    r: u16::from_be_bytes([t[0], t[1]]),
-                    g: u16::from_be_bytes([t[2], t[3]]),
-                    b: u16::from_be_bytes([t[4], t[5]]),
+                    r: read_be_u16(&t[0..2]),
+                    g: read_be_u16(&t[2..4]),
+                    b: read_be_u16(&t[4..6]),
                 }),
             },
             3 => ColorType::Indexed {
@@ -187,12 +178,16 @@ pub fn parse_ihdr_chunk(
             },
             4 => ColorType::GrayscaleAlpha,
             6 => ColorType::RGBA,
-            _ => return Err(PngError::new("Unexpected color type in header")),
+            _ => return Err(PngError::InvalidData),
         },
         bit_depth: byte_data[8].try_into()?,
         width: read_be_u32(&byte_data[0..4]),
         height: read_be_u32(&byte_data[4..8]),
-        interlaced: interlaced.try_into()?,
+        interlaced: match interlaced {
+            0 => false,
+            1 => true,
+            _ => return Err(PngError::InvalidData),
+        },
     })
 }
 
@@ -201,9 +196,11 @@ fn palette_to_rgba(
     palette_data: Option<Vec<u8>>,
     trns_data: Option<Vec<u8>>,
 ) -> Result<Vec<RGBA8>, PngError> {
-    let palette_data = palette_data.ok_or_else(|| PngError::new("no palette in indexed image"))?;
+    let palette_data = palette_data.ok_or(PngError::ChunkMissing("PLTE"))?;
     let mut palette: Vec<_> = palette_data
-        .chunks(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|color| RGBA8::new(color[0], color[1], color[2], 255))
         .collect();
 
@@ -216,12 +213,17 @@ fn palette_to_rgba(
 }
 
 #[inline]
-fn read_be_u32(bytes: &[u8]) -> u32 {
+pub fn read_be_u16(bytes: &[u8]) -> u16 {
+    u16::from_be_bytes(bytes.try_into().unwrap())
+}
+
+#[inline]
+pub fn read_be_u32(bytes: &[u8]) -> u32 {
     u32::from_be_bytes(bytes.try_into().unwrap())
 }
 
 /// Extract and decompress the ICC profile from an iCCP chunk
-pub fn extract_icc(iccp: &Chunk) -> Option<Vec<u8>> {
+pub fn extract_icc(iccp: &Chunk, max_size: Option<usize>) -> Option<Vec<u8>> {
     // Skip (useless) profile name
     let mut data = iccp.data.as_slice();
     loop {
@@ -236,21 +238,24 @@ pub fn extract_icc(iccp: &Chunk) -> Option<Vec<u8>> {
     if compression_method != 0 {
         return None; // The profile is supposed to be compressed (method 0)
     }
-    // The decompressed size is unknown so we have to guess the required buffer size
-    let max_size = compressed_data.len() * 2 + 1000;
-    match inflate(compressed_data, max_size) {
+    // Libdeflate works with a fixed size buffer. Since the decompressed size is unknown we have to
+    // guess the required buffer size. We allow a fairly generous 10x factor with a minimum of 1000.
+    let mut out_size = (compressed_data.len() * 10).max(1000);
+    // For sanity, impose a default limit of 1MB.
+    out_size = out_size.min(max_size.unwrap_or(1_000_000));
+    match inflate(compressed_data, out_size) {
         Ok(icc) => Some(icc),
         Err(e) => {
             // Log the error so we can know if the buffer size needs to be adjusted
-            warn!("Failed to decompress icc: {}", e);
+            warn!("Failed to decompress icc: {e}");
             None
         }
     }
 }
 
-/// Construct an iCCP chunk by compressing the ICC profile
-pub fn construct_iccp(icc: &[u8], deflater: Deflaters) -> PngResult<Chunk> {
-    let mut compressed = deflater.deflate(icc, &AtomicMin::new(None))?;
+/// Make an iCCP chunk by compressing the ICC profile
+pub fn make_iccp(icc: &[u8], deflater: Deflater, max_size: Option<usize>) -> PngResult<Chunk> {
+    let mut compressed = deflater.deflate(icc, max_size)?;
     let mut data = Vec::with_capacity(compressed.len() + 5);
     data.extend(b"icc"); // Profile name - generally unused, can be anything
     data.extend([0, 0]); // Null separator, zlib compression method
@@ -285,5 +290,112 @@ pub fn srgb_rendering_intent(icc_data: &[u8]) -> Option<u8> {
             }
         }
         _ => None,
+    }
+}
+
+/// Process aux chunks and potentially adjust options before optimizing
+pub fn preprocess_chunks(aux_chunks: &mut Vec<Chunk>, opts: &mut Options) {
+    let has_srgb = aux_chunks.iter().any(|c| &c.name == b"sRGB");
+    // Grayscale conversion should not be performed if the image is not in the sRGB colorspace
+    // An sRGB profile would need to be stripped on conversion, so disallow if stripping is disabled
+    let mut allow_grayscale = !has_srgb || opts.strip != StripChunks::None;
+
+    if let Some(iccp_idx) = aux_chunks.iter().position(|c| &c.name == b"iCCP") {
+        allow_grayscale = false;
+        // See if we can replace an iCCP chunk with an sRGB chunk
+        let may_replace_iccp = opts.strip != StripChunks::None && opts.strip.keep(b"sRGB");
+        if may_replace_iccp && has_srgb {
+            // Files aren't supposed to have both chunks, so we chose to honor sRGB
+            trace!("Removing iCCP chunk due to conflict with sRGB chunk");
+            aux_chunks.remove(iccp_idx);
+            allow_grayscale = true;
+        } else if let Some(icc) = extract_icc(&aux_chunks[iccp_idx], opts.max_decompressed_size) {
+            let intent = if may_replace_iccp {
+                srgb_rendering_intent(&icc)
+            } else {
+                None
+            };
+            // sRGB-like profile can be replaced with an sRGB chunk with the same rendering intent
+            if let Some(intent) = intent {
+                trace!("Replacing iCCP chunk with equivalent sRGB chunk");
+                aux_chunks[iccp_idx] = Chunk {
+                    name: *b"sRGB",
+                    data: vec![intent],
+                };
+                allow_grayscale = true;
+            } else if opts.idat_recoding {
+                // Try recompressing the profile
+                let cur_len = aux_chunks[iccp_idx].data.len();
+                if let Ok(iccp) = make_iccp(&icc, opts.deflater, Some(cur_len - 1)) {
+                    debug!(
+                        "Recompressed iCCP chunk: {} ({} bytes decrease)",
+                        iccp.data.len(),
+                        cur_len - iccp.data.len()
+                    );
+                    aux_chunks[iccp_idx] = iccp;
+                }
+            }
+        }
+    }
+
+    if !allow_grayscale && opts.grayscale_reduction {
+        debug!("Disabling grayscale reduction due to presence of sRGB or iCCP chunk");
+        opts.grayscale_reduction = false;
+    }
+
+    // Check for APNG by presence of acTL chunk
+    if aux_chunks.iter().any(|c| &c.name == b"acTL") {
+        warn!("APNG detected, disabling all reductions");
+        opts.interlace = None;
+        opts.bit_depth_reduction = false;
+        opts.color_type_reduction = false;
+        opts.palette_reduction = false;
+    } else if let StripChunks::Keep(names) = &opts.strip {
+        // Check for explicitly kept chunks that will prevent reductions
+        for name in Chunk::REDUCTION_CONFLICTS {
+            if names.contains(&name) && aux_chunks.iter().any(|c| c.name == name) {
+                warn!(
+                    "{} chunk explicitly kept, disabling all reductions",
+                    std::str::from_utf8(&name).unwrap()
+                );
+                opts.bit_depth_reduction = false;
+                opts.color_type_reduction = false;
+                opts.palette_reduction = false;
+                break;
+            }
+        }
+    }
+}
+
+/// Perform cleanup of certain aux chunks after optimization has been completed
+pub fn postprocess_chunks(aux_chunks: &mut Vec<Chunk>, ihdr: &IhdrData, orig_ihdr: &IhdrData) {
+    // If the depth/color type has changed, some chunks may be invalid and should be dropped
+    // While these could potentially be converted, they have no known use case today and are
+    // generally more trouble than they're worth
+    if orig_ihdr.bit_depth != ihdr.bit_depth || orig_ihdr.color_type != ihdr.color_type {
+        aux_chunks.retain(|c| {
+            if Chunk::REDUCTION_CONFLICTS.contains(&c.name) {
+                warn!(
+                    "Removing {} chunk as it no longer matches the image data",
+                    std::str::from_utf8(&c.name).unwrap()
+                );
+                return false;
+            }
+            true
+        });
+    }
+
+    // Remove any sRGB or iCCP chunks if the image was converted to or from grayscale
+    if orig_ihdr.color_type.is_gray() != ihdr.color_type.is_gray() {
+        aux_chunks.retain(|c| {
+            let invalid = &c.name == b"sRGB" || &c.name == b"iCCP";
+            if invalid {
+                trace!(
+                    "Removing {} chunk as it no longer matches the color type",
+                    std::str::from_utf8(&c.name).unwrap()
+                );
+            }
+            !invalid
+        });
     }
 }

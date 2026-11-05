@@ -82,7 +82,8 @@ async function oxipngZopfli(input) {
     const started = performance.now();
     const { code } = await run.runTool({
         exe: exe.exe,
-        args: ['-o', 'max', '-Z', '--fast', '-i0', '-a', '--strip=safe', '--out', out, '--', input],
+        // -z: OxiPNG 10 renamed its Zopfli flag from -Z
+        args: ['-o', 'max', '-z', '--fast', '-i0', '-a', '--strip=safe', '--out', out, '--', input],
     });
     const ms = performance.now() - started;
     if (code !== 0 || !looksComplete('png', out)) return { size: null, ms };
@@ -145,7 +146,7 @@ for (const original of files) {
         const z = await oxipngZopfli(input);
         const bestChain = Math.min(chainSize, z && z.size ? z.size : Infinity);
         note('png chain: zopflipng then oxipng/advpng', before, chainSize, chainMs, chainSize === bestChain);
-        if (z) note('png variant: oxipng -o max -Z alone', before, z.size, z.ms, z.size && z.size === bestChain);
+        if (z) note('png variant: oxipng -o max -z alone', before, z.size, z.ms, z.size && z.size === bestChain);
     }
     const won = results.filter((r) => r.size === best).map((r) => r.row.split(' ')[1]).join(', ');
     const bestKb = Number.isFinite(best) ? `${(best / 1024).toFixed(1)} KB` : 'nothing smaller';

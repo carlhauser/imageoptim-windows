@@ -274,11 +274,23 @@ once a second rather than after every file.
 `scripts/bench.mjs` measures the optimizers on a folder of images: bytes saved,
 time and wins per tool, and the current PNG plan against OxiPNG's own Zopfli.
 Over the realistic images in this repository - 33 screenshots, icons, photos,
-GIFs and WebPs - OxiPNG with `-o max -Z` saved 0.3 KB on the PNGs Zopfli runs
-on, against 6.8 KB for Zopfli followed by OxiPNG and AdvPNG, and took longer,
-so the plan stays. Most of those images were optimized already; the interlaced
-Gifsicle pass won none of three GIFs, too few to drop it on. The script is
-there for larger, real image sets.
+GIFs and WebPs - OxiPNG 9.0 with `-o max -Z` saved 0.3 KB on the PNGs Zopfli
+runs on, against 6.8 KB for Zopfli followed by OxiPNG and AdvPNG, and took
+longer, so the plan stays. Most of those images were optimized already; the
+interlaced Gifsicle pass won none of three GIFs, too few to drop it on. The
+script is there for larger, real image sets.
+
+OxiPNG is 10.2.1, which replaced 9.0.0 and with it the two dependencies
+Dependabot flagged. With the app's own flags, over 23 PNGs from this repository
+(2.7 MB) and the 54 of PngSuite, every output checked whole:
+
+| | 9.0.0 | 10.2.1 |
+| --- | --- | --- |
+| default effort, `-o4` | 316.7 KB saved, 17.1s | 316.3 KB, 15.6s |
+| highest efforts, `-o6` | 317.2 KB saved, 44.7s | 328.5 KB, 48.2s |
+
+OxiPNG 10 renamed `-Z` to `-z`; only the benchmark used it. The app's own
+flags, shared with the macOS app, did not change.
 
 ```sh
 cd win && node scripts/bench.mjs <folder>

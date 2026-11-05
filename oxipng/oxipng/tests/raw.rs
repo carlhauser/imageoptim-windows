@@ -1,12 +1,11 @@
-use oxipng::internal_tests::*;
-use oxipng::*;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
+
+use oxipng::{internal_tests::*, *};
 
 fn get_opts() -> Options {
     Options {
         force: true,
-        filter: indexset! { RowFilter::None },
+        filters: indexset! {FilterStrategy::NONE},
         ..Default::default()
     }
 }

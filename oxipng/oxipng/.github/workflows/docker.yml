@@ -1,0 +1,62 @@
+name: docker
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - v*.*.*
+  pull_request:
+    types:
+      - opened
+      - synchronize
+  workflow_dispatch:
+    inputs:
+      use_cache:
+        description: "Use build cache"
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  # If we ever end up with two concurrent Docker build jobs for the same commit
+  # and same versioning context, the former should be cancelled
+  group: docker-${{ github.sha }}-${{ github.ref_type }}-${{ github.head_ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  build:
+    uses: docker/github-builder/.github/workflows/build.yml@58cb9f5b71b1836d6f690c1e95effdeb9b98cb8a # v1.17.0
+    permissions:
+      contents: read
+      packages: write # Push the image to ghcr.io
+      id-token: write # Create the OIDC token used for attestations
+      attestations: write # Attach provenance and SBOM attestations to the image
+    with:
+      output: image
+      platforms: linux/amd64,linux/arm64
+      push: ${{ github.event_name != 'pull_request' }}
+      cache: ${{ github.event_name != 'workflow_dispatch' || inputs.use_cache }}
+      # We don't sign the image because ghcr.io doesn't support OCI Referrers API yet, and the fallback relies on pushing new tags on each build
+      # https://github.com/docker/github-builder/issues/109#issuecomment-3885082486
+      # https://github.com/opencontainers/distribution-spec/blob/v1.1.0/spec.md#backwards-compatibility
+      sign: false
+      sbom: true
+      meta-images: ghcr.io/${{ github.repository }}
+      meta-tags: |
+        type=ref,event=branch
+        type=ref,event=pr
+        type=semver,pattern={{raw}}
+      set-meta-annotations: true
+      set-meta-labels: true
+      labels: |
+        org.opencontainers.image.title=Oxipng
+      annotations: |
+        org.opencontainers.image.title=Oxipng
+
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}

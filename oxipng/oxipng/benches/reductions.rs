@@ -3,9 +3,9 @@
 extern crate oxipng;
 extern crate test;
 
-use oxipng::internal_tests::*;
-use oxipng::*;
 use std::path::PathBuf;
+
+use oxipng::{internal_tests::*, *};
 use test::Bencher;
 
 #[bench]
@@ -55,33 +55,33 @@ fn reductions_8_to_1_bits(b: &mut Bencher) {
 }
 
 #[bench]
-fn reductions_4_to_2_bits(b: &mut Bencher) {
+fn reductions_1_to_8_bits(b: &mut Bencher) {
     let input = test::black_box(PathBuf::from(
-        "tests/files/palette_4_should_be_palette_2.png",
+        "tests/files/palette_1_should_be_palette_1.png",
     ));
     let png = PngData::new(&input, &Options::default()).unwrap();
 
-    b.iter(|| bit_depth::reduced_bit_depth_8_or_less(&png.raw));
+    b.iter(|| bit_depth::expanded_bit_depth_to_8(&png.raw));
 }
 
 #[bench]
-fn reductions_4_to_1_bits(b: &mut Bencher) {
+fn reductions_2_to_8_bits(b: &mut Bencher) {
     let input = test::black_box(PathBuf::from(
-        "tests/files/palette_4_should_be_palette_1.png",
+        "tests/files/palette_2_should_be_palette_2.png",
     ));
     let png = PngData::new(&input, &Options::default()).unwrap();
 
-    b.iter(|| bit_depth::reduced_bit_depth_8_or_less(&png.raw));
+    b.iter(|| bit_depth::expanded_bit_depth_to_8(&png.raw));
 }
 
 #[bench]
-fn reductions_2_to_1_bits(b: &mut Bencher) {
+fn reductions_4_to_8_bits(b: &mut Bencher) {
     let input = test::black_box(PathBuf::from(
-        "tests/files/palette_2_should_be_palette_1.png",
+        "tests/files/palette_4_should_be_palette_4.png",
     ));
     let png = PngData::new(&input, &Options::default()).unwrap();
 
-    b.iter(|| bit_depth::reduced_bit_depth_8_or_less(&png.raw));
+    b.iter(|| bit_depth::expanded_bit_depth_to_8(&png.raw));
 }
 
 #[bench]
@@ -115,41 +115,11 @@ fn reductions_grayscale_8_to_1_bits(b: &mut Bencher) {
 }
 
 #[bench]
-fn reductions_grayscale_4_to_2_bits(b: &mut Bencher) {
-    let input = test::black_box(PathBuf::from(
-        "tests/files/grayscale_4_should_be_grayscale_2.png",
-    ));
-    let png = PngData::new(&input, &Options::default()).unwrap();
-
-    b.iter(|| bit_depth::reduced_bit_depth_8_or_less(&png.raw));
-}
-
-#[bench]
-fn reductions_grayscale_4_to_1_bits(b: &mut Bencher) {
-    let input = test::black_box(PathBuf::from(
-        "tests/files/grayscale_4_should_be_grayscale_1.png",
-    ));
-    let png = PngData::new(&input, &Options::default()).unwrap();
-
-    b.iter(|| bit_depth::reduced_bit_depth_8_or_less(&png.raw));
-}
-
-#[bench]
-fn reductions_grayscale_2_to_1_bits(b: &mut Bencher) {
-    let input = test::black_box(PathBuf::from(
-        "tests/files/grayscale_2_should_be_grayscale_1.png",
-    ));
-    let png = PngData::new(&input, &Options::default()).unwrap();
-
-    b.iter(|| bit_depth::reduced_bit_depth_8_or_less(&png.raw));
-}
-
-#[bench]
 fn reductions_rgba_to_rgb_16(b: &mut Bencher) {
     let input = test::black_box(PathBuf::from("tests/files/rgba_16_should_be_rgb_16.png"));
     let png = PngData::new(&input, &Options::default()).unwrap();
 
-    b.iter(|| alpha::reduced_alpha_channel(&png.raw, false));
+    b.iter(|| alpha::reduced_alpha_channel(&png.raw, true));
 }
 
 #[bench]
@@ -157,7 +127,15 @@ fn reductions_rgba_to_rgb_8(b: &mut Bencher) {
     let input = test::black_box(PathBuf::from("tests/files/rgba_8_should_be_rgb_8.png"));
     let png = PngData::new(&input, &Options::default()).unwrap();
 
-    b.iter(|| alpha::reduced_alpha_channel(&png.raw, false));
+    b.iter(|| alpha::reduced_alpha_channel(&png.raw, true));
+}
+
+#[bench]
+fn reductions_rgba_to_rgb_trns_8(b: &mut Bencher) {
+    let input = test::black_box(PathBuf::from("tests/files/rgba_8_should_be_rgb_trns_8.png"));
+    let png = PngData::new(&input, &Options::default()).unwrap();
+
+    b.iter(|| alpha::reduced_alpha_channel(&png.raw, true));
 }
 
 #[bench]
@@ -178,32 +156,6 @@ fn reductions_rgba_to_grayscale_alpha_8(b: &mut Bencher) {
     let png = PngData::new(&input, &Options::default()).unwrap();
 
     b.iter(|| color::reduced_rgb_to_grayscale(&png.raw));
-}
-
-#[bench]
-fn reductions_rgba_to_grayscale_16(b: &mut Bencher) {
-    let input = test::black_box(PathBuf::from(
-        "tests/files/rgba_16_should_be_grayscale_16.png",
-    ));
-    let png = PngData::new(&input, &Options::default()).unwrap();
-
-    b.iter(|| {
-        color::reduced_rgb_to_grayscale(&png.raw)
-            .and_then(|r| alpha::reduced_alpha_channel(&r, false))
-    });
-}
-
-#[bench]
-fn reductions_rgba_to_grayscale_8(b: &mut Bencher) {
-    let input = test::black_box(PathBuf::from(
-        "tests/files/rgba_8_should_be_grayscale_8.png",
-    ));
-    let png = PngData::new(&input, &Options::default()).unwrap();
-
-    b.iter(|| {
-        color::reduced_rgb_to_grayscale(&png.raw)
-            .and_then(|r| alpha::reduced_alpha_channel(&r, false))
-    });
 }
 
 #[bench]
@@ -241,9 +193,49 @@ fn reductions_rgb_to_palette_8(b: &mut Bencher) {
 }
 
 #[bench]
+fn reductions_grayscale_alpha_to_grayscale_16(b: &mut Bencher) {
+    let input = test::black_box(PathBuf::from(
+        "tests/files/grayscale_alpha_16_should_be_grayscale_16.png",
+    ));
+    let png = PngData::new(&input, &Options::default()).unwrap();
+
+    b.iter(|| alpha::reduced_alpha_channel(&png.raw, true));
+}
+
+#[bench]
+fn reductions_grayscale_alpha_to_grayscale_8(b: &mut Bencher) {
+    let input = test::black_box(PathBuf::from(
+        "tests/files/grayscale_alpha_8_should_be_grayscale_8.png",
+    ));
+    let png = PngData::new(&input, &Options::default()).unwrap();
+
+    b.iter(|| alpha::reduced_alpha_channel(&png.raw, true));
+}
+
+#[bench]
+fn reductions_grayscale_alpha_to_grayscale_trns_8(b: &mut Bencher) {
+    let input = test::black_box(PathBuf::from(
+        "tests/files/grayscale_alpha_8_should_be_grayscale_trns_8.png",
+    ));
+    let png = PngData::new(&input, &Options::default()).unwrap();
+
+    b.iter(|| alpha::reduced_alpha_channel(&png.raw, true));
+}
+
+#[bench]
 fn reductions_grayscale_8_to_palette_8(b: &mut Bencher) {
     let input = test::black_box(PathBuf::from(
         "tests/files/grayscale_8_should_be_palette_8.png",
+    ));
+    let png = PngData::new(&input, &Options::default()).unwrap();
+
+    b.iter(|| color::reduced_to_indexed(&png.raw, true));
+}
+
+#[bench]
+fn reductions_grayscale_alpha_to_palette_8(b: &mut Bencher) {
+    let input = test::black_box(PathBuf::from(
+        "tests/files/grayscale_alpha_8_should_be_palette_8.png",
     ));
     let png = PngData::new(&input, &Options::default()).unwrap();
 
@@ -257,7 +249,7 @@ fn reductions_palette_8_to_grayscale_8(b: &mut Bencher) {
     ));
     let png = PngData::new(&input, &Options::default()).unwrap();
 
-    b.iter(|| color::indexed_to_channels(&png.raw, true));
+    b.iter(|| color::indexed_to_channels(&png.raw, true, false));
 }
 
 #[bench]
@@ -301,13 +293,57 @@ fn reductions_palette_sort(b: &mut Bencher) {
 }
 
 #[bench]
-fn reductions_palette_sort_battiato(b: &mut Bencher) {
+fn reductions_palette_sort_build_matrix(b: &mut Bencher) {
     let input = test::black_box(PathBuf::from(
         "tests/files/palette_8_should_be_palette_8.png",
     ));
     let png = PngData::new(&input, &Options::default()).unwrap();
 
-    b.iter(|| palette::sorted_palette_battiato(&png.raw));
+    b.iter(|| palette::CoOccurrenceMatrix::from(&png.raw));
+}
+
+#[bench]
+fn reductions_palette_sort_mzeng(b: &mut Bencher) {
+    let input = test::black_box(PathBuf::from(
+        "tests/files/palette_8_should_be_palette_8.png",
+    ));
+    let png = PngData::new(&input, &Options::default()).unwrap();
+    let matrix = palette::CoOccurrenceMatrix::from(&png.raw).unwrap();
+
+    b.iter(|| palette::sorted_palette_mzeng(&png.raw, &matrix));
+}
+
+#[bench]
+fn reductions_palette_sort_ezeng(b: &mut Bencher) {
+    let input = test::black_box(PathBuf::from(
+        "tests/files/palette_8_should_be_palette_8.png",
+    ));
+    let png = PngData::new(&input, &Options::default()).unwrap();
+    let matrix = palette::CoOccurrenceMatrix::from(&png.raw).unwrap();
+
+    b.iter(|| palette::sorted_palette_ezeng(&png.raw, &matrix, 0));
+}
+
+#[bench]
+fn reductions_palette_sort_ezeng_with_swaps(b: &mut Bencher) {
+    let input = test::black_box(PathBuf::from(
+        "tests/files/palette_8_should_be_palette_8.png",
+    ));
+    let png = PngData::new(&input, &Options::default()).unwrap();
+    let matrix = palette::CoOccurrenceMatrix::from(&png.raw).unwrap();
+
+    b.iter(|| palette::sorted_palette_ezeng(&png.raw, &matrix, 50));
+}
+
+#[bench]
+fn reductions_palette_sort_battiato(b: &mut Bencher) {
+    let input = test::black_box(PathBuf::from(
+        "tests/files/palette_8_should_be_palette_8.png",
+    ));
+    let png = PngData::new(&input, &Options::default()).unwrap();
+    let matrix = palette::CoOccurrenceMatrix::from(&png.raw).unwrap();
+
+    b.iter(|| palette::sorted_palette_battiato(&png.raw, &matrix));
 }
 
 #[bench]

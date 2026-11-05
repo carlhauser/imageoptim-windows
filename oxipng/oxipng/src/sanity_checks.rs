@@ -1,5 +1,10 @@
+use std::io::Cursor;
+
 use image::{codecs::png::PngDecoder, *};
 use log::{error, warn};
+
+#[cfg(not(feature = "parallel"))]
+use crate::rayon;
 
 /// Validate that the output png data still matches the original image
 pub fn validate_output(output: &[u8], original_data: &[u8]) -> bool {
@@ -34,12 +39,12 @@ pub fn validate_output(output: &[u8], original_data: &[u8]) -> bool {
 
 /// Loads a PNG image from memory to frames of [RgbaImage]
 fn load_png_image_from_memory(png_data: &[u8]) -> Result<Vec<RgbaImage>, image::ImageError> {
-    let decoder = PngDecoder::new(png_data)?;
-    if decoder.is_apng() {
+    let decoder = PngDecoder::new(Cursor::new(png_data))?;
+    if decoder.is_apng()? {
         decoder
-            .apng()
+            .apng()?
             .into_frames()
-            .map(|f| f.map(|f| f.into_buffer()))
+            .map(|f| f.map(image::Frame::into_buffer))
             .collect()
     } else {
         DynamicImage::from_decoder(decoder).map(|i| vec![i.into_rgba8()])

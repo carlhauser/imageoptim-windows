@@ -1,30 +1,24 @@
-use std::mem::transmute;
-use std::{fmt, fmt::Display};
+use std::{fmt, fmt::Display, mem::transmute};
 
-use crate::error::PngError;
+mod strategies;
+pub use strategies::FilterStrategy;
 
+/// PNG delta filters
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum RowFilter {
-    // Standard filter types
     None,
     Sub,
     Up,
     Average,
     Paeth,
-    // Heuristic strategies
-    MinSum,
-    Entropy,
-    Bigrams,
-    BigEnt,
-    Brute,
 }
 
 impl TryFrom<u8> for RowFilter {
     type Error = ();
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if value > Self::LAST {
+        if value > 4 {
             return Err(());
         }
         unsafe { transmute(value as i8) }
@@ -40,11 +34,6 @@ impl Display for RowFilter {
                 Self::Up => "Up",
                 Self::Average => "Average",
                 Self::Paeth => "Paeth",
-                Self::MinSum => "MinSum",
-                Self::Entropy => "Entropy",
-                Self::Bigrams => "Bigrams",
-                Self::BigEnt => "BigEnt",
-                Self::Brute => "Brute",
             },
             f,
         )
@@ -52,10 +41,7 @@ impl Display for RowFilter {
 }
 
 impl RowFilter {
-    pub const LAST: u8 = Self::Brute as u8;
-    pub(crate) const STANDARD: [Self; 5] =
-        [Self::None, Self::Sub, Self::Up, Self::Average, Self::Paeth];
-    pub(crate) const SINGLE_LINE: [Self; 2] = [Self::None, Self::Sub];
+    pub(crate) const ALL: [Self; 5] = [Self::None, Self::Sub, Self::Up, Self::Average, Self::Paeth];
 
     pub(crate) fn filter_line(
         self,
@@ -72,7 +58,6 @@ impl RowFilter {
             self.optimize_alpha(bpp, data, prev_line, bpp - alpha_bytes);
         }
 
-        buf.clear();
         buf.reserve(data.len() + 1);
         buf.push(self as u8);
         match self {
@@ -96,26 +81,32 @@ impl RowFilter {
                 );
             }
             Self::Average => {
-                for (i, byte) in data.iter().enumerate() {
-                    buf.push(match i.checked_sub(bpp) {
-                        Some(x) => byte.wrapping_sub(
-                            ((u16::from(data[x]) + u16::from(prev_line[i])) >> 1) as u8,
-                        ),
-                        None => byte.wrapping_sub(prev_line[i] >> 1),
-                    });
-                }
+                buf.extend(
+                    data.iter()
+                        .zip(prev_line.iter())
+                        .take(bpp)
+                        .map(|(cur, &up)| cur.wrapping_sub(up >> 1)),
+                );
+                buf.extend(data.iter().enumerate().skip(bpp).map(|(i, &cur)| {
+                    let left = data[i - bpp];
+                    let up = prev_line[i];
+                    cur.wrapping_sub(((u16::from(left) + u16::from(up)) >> 1) as u8)
+                }));
             }
             Self::Paeth => {
-                for (i, byte) in data.iter().enumerate() {
-                    buf.push(match i.checked_sub(bpp) {
-                        Some(x) => {
-                            byte.wrapping_sub(paeth_predictor(data[x], prev_line[i], prev_line[x]))
-                        }
-                        None => byte.wrapping_sub(prev_line[i]),
-                    });
-                }
+                buf.extend(
+                    data.iter()
+                        .zip(prev_line.iter())
+                        .take(bpp)
+                        .map(|(cur, &up)| cur.wrapping_sub(up)),
+                );
+                buf.extend(data.iter().enumerate().skip(bpp).map(|(i, &cur)| {
+                    let left = data[i - bpp];
+                    let up = prev_line[i];
+                    let left_up = prev_line[i - bpp];
+                    cur.wrapping_sub(paeth_predictor(left, up, left_up))
+                }));
             }
-            _ => unreachable!(),
         }
     }
 
@@ -126,8 +117,8 @@ impl RowFilter {
             return;
         }
 
-        let mut pixels: Vec<_> = data.chunks_mut(bpp).collect();
-        let prev_pixels: Vec<_> = prev_line.chunks(bpp).collect();
+        let mut pixels: Vec<_> = data.chunks_exact_mut(bpp).collect();
+        let prev_pixels: Vec<_> = prev_line.chunks_exact(bpp).collect();
         for i in 0..pixels.len() {
             if pixels[i].iter().skip(color_bytes).all(|b| *b == 0) {
                 // If the first pixel in the row is transparent, find the next non-transparent pixel and pretend
@@ -139,10 +130,28 @@ impl RowFilter {
                         .unwrap_or(i),
                     _ => i - 1,
                 };
+
+                // These assertions help eliminate a few bounds checks in the slice accesses below
+                assert!(prev < pixels.len());
+                assert!(i < prev_pixels.len());
+
                 match self {
+                    Self::None => unreachable!(),
                     Self::Sub => {
-                        for j in 0..color_bytes {
-                            pixels[i][j] = pixels[prev][j];
+                        // The code below is roughly equivalent to pixels[i][0..color_bytes].copy_from_slice(&pixels[prev][0..color_bytes]),
+                        // if such a thing was possible to do without violating Rust aliasing rules. See:
+                        // https://users.rust-lang.org/t/problem-borrowing-two-elements-of-vec-mutably/21446/2
+
+                        if prev < i {
+                            let (pixels_head, pixels_tail) = pixels.split_at_mut(prev + 1);
+                            pixels_tail[i - prev - 1][0..color_bytes]
+                                .copy_from_slice(&pixels_head[prev][0..color_bytes]);
+                        } else if prev > i {
+                            let (pixels_head, pixels_tail) = pixels.split_at_mut(i + 1);
+                            pixels_head[i][0..color_bytes]
+                                .copy_from_slice(&pixels_tail[prev - i - 1][0..color_bytes]);
+                        } else {
+                            // If prev == i, we'd be copying the pixels onto themselves, which is useless
                         }
                     }
                     Self::Up => {
@@ -171,7 +180,6 @@ impl RowFilter {
                             };
                         }
                     }
-                    _ => unreachable!(),
                 }
             }
         }
@@ -183,22 +191,20 @@ impl RowFilter {
         data: &[u8],
         prev_line: &[u8],
         buf: &mut Vec<u8>,
-    ) -> Result<(), PngError> {
-        buf.clear();
-        buf.reserve(data.len());
+    ) {
         assert!(data.len() >= bpp);
         assert_eq!(data.len(), prev_line.len());
+        let offset = buf.len();
+        buf.reserve(data.len());
         match self {
             Self::None => {
                 buf.extend_from_slice(data);
             }
             Self::Sub => {
-                for (i, &cur) in data.iter().enumerate() {
-                    let prev_byte = i.checked_sub(bpp).and_then(|x| buf.get(x).copied());
-                    buf.push(match prev_byte {
-                        Some(b) => cur.wrapping_add(b),
-                        None => cur,
-                    });
+                buf.extend_from_slice(&data[0..bpp]);
+                for i in bpp..data.len() {
+                    let left = buf[offset + i - bpp];
+                    buf.push(data[i].wrapping_add(left));
                 }
             }
             Self::Up => {
@@ -209,32 +215,27 @@ impl RowFilter {
                 );
             }
             Self::Average => {
-                for (i, (&cur, &last)) in data.iter().zip(prev_line).enumerate() {
-                    let prev_byte = i.checked_sub(bpp).and_then(|x| buf.get(x).copied());
-                    buf.push(match prev_byte {
-                        Some(b) => cur.wrapping_add(((u16::from(b) + u16::from(last)) >> 1) as u8),
-                        None => cur.wrapping_add(last >> 1),
-                    });
+                for (cur, &up) in data.iter().take(bpp).zip(prev_line.iter().take(bpp)) {
+                    buf.push(cur.wrapping_add(up >> 1));
+                }
+                for i in bpp..data.len() {
+                    let left = buf[offset + i - bpp];
+                    let up = prev_line[i];
+                    buf.push(data[i].wrapping_add(((u16::from(left) + u16::from(up)) >> 1) as u8));
                 }
             }
             Self::Paeth => {
-                for (i, (&cur, &up)) in data.iter().zip(prev_line).enumerate() {
-                    buf.push(
-                        match i
-                            .checked_sub(bpp)
-                            .map(|x| (buf.get(x).copied(), prev_line.get(x).copied()))
-                        {
-                            Some((Some(left), Some(left_up))) => {
-                                cur.wrapping_add(paeth_predictor(left, up, left_up))
-                            }
-                            _ => cur.wrapping_add(up),
-                        },
-                    );
+                for (cur, &up) in data.iter().take(bpp).zip(prev_line.iter().take(bpp)) {
+                    buf.push(cur.wrapping_add(up));
+                }
+                for i in bpp..data.len() {
+                    let left = buf[offset + i - bpp];
+                    let up = prev_line[i];
+                    let left_up = prev_line[i - bpp];
+                    buf.push(data[i].wrapping_add(paeth_predictor(left, up, left_up)));
                 }
             }
-            _ => return Err(PngError::InvalidData),
         }
-        Ok(())
     }
 }
 

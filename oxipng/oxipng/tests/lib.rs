@@ -1,7 +1,6 @@
+use std::{fs, fs::File, io::prelude::*};
+
 use oxipng::*;
-use std::fs;
-use std::fs::File;
-use std::io::prelude::*;
 
 #[test]
 fn optimize_from_memory() {
@@ -41,6 +40,19 @@ fn optimize() {
         &Options::default(),
     );
     assert!(result.is_ok());
+}
+
+#[test]
+fn skip_c2pa() {
+    let result = oxipng::optimize(
+        &"tests/files/c2pa-signed.png".into(),
+        &OutFile::None,
+        &Options {
+            strip: StripChunks::Keep(indexset! {*b"caBX"}),
+            ..Options::default()
+        },
+    );
+    assert!(matches!(result, Err(PngError::ChunkPreventsChanges(_))));
 }
 
 #[test]

@@ -1,0 +1,7 @@
+.editorconfig
+.gitignore
+/.git/
+/.github/
+/.pre-commit-hooks.yaml
+/scripts/
+/target/

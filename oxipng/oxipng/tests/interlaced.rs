@@ -1,9 +1,9 @@
-use indexmap::IndexSet;
-use oxipng::internal_tests::*;
-use oxipng::*;
-use std::fs::remove_file;
-use std::path::Path;
-use std::path::PathBuf;
+use std::{
+    fs::remove_file,
+    path::{Path, PathBuf},
+};
+
+use oxipng::{internal_tests::*, *};
 
 const GRAYSCALE: u8 = 0;
 const RGB: u8 = 2;
@@ -12,16 +12,12 @@ const GRAYSCALE_ALPHA: u8 = 4;
 const RGBA: u8 = 6;
 
 fn get_opts(input: &Path) -> (OutFile, oxipng::Options) {
-    let mut options = oxipng::Options {
+    // Level 3 is required to enable all transformations
+    let options = oxipng::Options {
         force: true,
-        fast_evaluation: false,
         interlace: None,
-        ..Default::default()
+        ..oxipng::Options::from_preset(3)
     };
-    let mut filter = IndexSet::new();
-    filter.insert(RowFilter::None);
-    options.filter = filter;
-
     (OutFile::from_path(input.with_extension("out.png")), options)
 }
 
@@ -38,12 +34,12 @@ fn test_it_converts(
 
     assert_eq!(png.raw.ihdr.color_type.png_header_code(), color_type_in);
     assert_eq!(png.raw.ihdr.bit_depth, bit_depth_in);
-    assert_eq!(png.raw.ihdr.interlaced, Interlacing::Adam7);
+    assert!(png.raw.ihdr.interlaced);
 
     match oxipng::optimize(&InFile::Path(input), &output, &opts) {
         Ok(_) => (),
         Err(x) => panic!("{}", x),
-    };
+    }
     let output = output.path().unwrap();
     assert!(output.exists());
 
@@ -660,6 +656,17 @@ fn interlaced_small_files() {
     test_it_converts(
         "tests/files/interlaced_small_files.png",
         INDEXED,
+        BitDepth::Eight,
+        RGB,
+        BitDepth::Eight,
+    );
+}
+
+#[test]
+fn interlaced_vertical_filters() {
+    test_it_converts(
+        "tests/files/interlaced_vertical_filters.png",
+        RGB,
         BitDepth::Eight,
         RGB,
         BitDepth::Eight,

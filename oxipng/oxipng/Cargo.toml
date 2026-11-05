@@ -2,18 +2,29 @@
 authors = ["Joshua Holmer <jholmer.in@gmail.com>"]
 categories = ["command-line-utilities", "compression"]
 description = "A lossless PNG compression optimizer"
+keywords = ["png", "image-compression", "optimization", "multi-threading", "lossless"]
 documentation = "https://docs.rs/oxipng"
-edition = "2021"
-exclude = ["tests/*", "bench/*"]
-homepage = "https://github.com/shssoichiro/oxipng"
+edition = "2024"
+exclude = [
+  ".editorconfig",
+  ".gitattributes",
+  ".github/*",
+  ".gitignore",
+  ".pre-commit-hooks.yaml",
+  "Dockerfile",
+  "scripts/*",
+  "tests/*",
+  "xtask/*",
+]
+homepage = "https://github.com/oxipng/oxipng"
 license = "MIT"
 name = "oxipng"
-repository = "https://github.com/shssoichiro/oxipng"
-version = "9.0.0"
-rust-version = "1.66.0"
+repository = "https://github.com/oxipng/oxipng"
+version = "10.2.1"
+rust-version = "1.88.0"
 
 [badges]
-travis-ci = { repository = "shssoichiro/oxipng", branch = "master" }
+travis-ci = { repository = "oxipng/oxipng", branch = "master" }
 maintenance = { status = "actively-developed" }
 
 [[bin]]
@@ -27,56 +38,32 @@ name = "zopfli"
 required-features = ["zopfli"]
 
 [dependencies]
-zopfli = { version = "0.8.0", optional = true, default-features = false, features = ["std", "zlib"] }
-rgb = "0.8.36"
-indexmap = "2.0.0"
-libdeflater = "1.19.0"
-log = "0.4.19"
-bitvec = "1.0.1"
-rustc-hash = "1.1.0"
+clap = { version = "4.6.0", optional = true, features = ["wrap_help"] }
+env_logger = { version = "0.11.10", optional = true, default-features = false, features = ["auto-color"] }
+image = { version = "0.25.9", optional = true, default-features = false, features = ["png"] }
+indexmap = "2.14.0"
+libdeflater = "1.25.2"
+log = "0.4.31"
+parse-size = { version = "1.1.0", optional = true }
+rayon = { version = "1.11.0", optional = true }
+rgb = "0.8.53"
+rustc-hash = "2.1.2"
+zopfli = { version = "0.8.3", optional = true, default-features = false, features = ["std", "zlib"] }
 
-[dependencies.env_logger]
-optional = true
-default-features = false
-features = ["auto-color"]
-version = "0.10.0"
+[target.'cfg(windows)'.dependencies]
+glob = { version = "0.3.3", optional = true }
 
-[dependencies.crossbeam-channel]
-optional = true
-version = "0.5.8"
-
-[dependencies.filetime]
-optional = true
-version = "0.2.21"
-
-[dependencies.rayon]
-optional = true
-version = "1.7.0"
-
-[dependencies.clap]
-optional = true
-version = "4.3.8"
-features = ["wrap_help"]
-
-[target.'cfg(windows)'.dependencies.glob]
-optional = true
-version = "0.3.1"
-
-[dependencies.image]
-optional = true
-default-features = false
-features = ["png"]
-version = "0.24.6"
-
-[build-dependencies]
-rustc_version = "0.4.0"
+[dev-dependencies]
+serde_json = "1.0.150"
 
 [features]
-binary = ["clap", "glob", "env_logger"]
-default = ["binary", "filetime", "parallel", "zopfli"]
-parallel = ["rayon", "indexmap/rayon", "crossbeam-channel"]
+binary = ["dep:clap", "dep:glob", "dep:env_logger", "dep:parse-size"]
+default = ["binary", "parallel", "zopfli"]
+parallel = ["dep:rayon", "indexmap/rayon"]
 freestanding = ["libdeflater/freestanding"]
-sanity-checks = ["image"]
+sanity-checks = ["dep:image"]
+zopfli = ["dep:zopfli"]
+system-libdeflate = ["libdeflater/dynamic"]
 
 [lib]
 name = "oxipng"
@@ -86,8 +73,48 @@ path = "src/lib.rs"
 opt-level = 2
 
 [profile.release]
-lto = "thin"
+lto = "fat"
 strip = "symbols"
+panic = "abort"
 
-[profile.dev.package.bitvec]
-opt-level = 3
+[package.metadata.deb]
+assets = [
+    ["target/release/oxipng", "usr/bin/", "755"],
+    ["target/xtask/mangen/manpages/oxipng.1", "usr/share/man/man1/", "644"],
+    ["README.md", "usr/share/doc/oxipng/", "644"],
+    ["CHANGELOG.md", "usr/share/doc/oxipng/", "644"],
+]
+
+[lints.rust]
+missing_copy_implementations = "deny"
+missing_debug_implementations = "deny"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_import_braces = "warn"
+
+[lints.clippy]
+cloned_instead_of_copied = "warn"
+expl_impl_clone_on_copy = "warn"
+float_cmp_const = "warn"
+if_not_else = "warn"
+ignored_unit_patterns = "warn"
+linkedlist = "warn"
+manual_let_else = "warn"
+map_flatten = "warn"
+map_unwrap_or = "warn"
+match_same_arms = "warn"
+mem_forget = "warn"
+missing_const_for_fn = "warn"
+mut_mut = "warn"
+mutex_integer = "warn"
+needless_continue = "warn"
+option_if_let_else = "warn"
+path_buf_push_overwrite = "warn"
+range_plus_one = "warn"
+redundant_clone = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
+unnecessary_semicolon = "warn"
+unseparated_literal_suffix = "warn"
+use_self = "warn"
+useless_let_if_seq = "warn"

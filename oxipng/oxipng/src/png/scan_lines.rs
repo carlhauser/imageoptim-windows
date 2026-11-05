@@ -1,4 +1,3 @@
-use crate::interlace::Interlacing;
 use crate::png::PngImage;
 
 /// An iterator over the scan lines of a PNG image
@@ -12,6 +11,7 @@ pub struct ScanLines<'a> {
 }
 
 impl<'a> ScanLines<'a> {
+    #[must_use]
     pub fn new(png: &'a PngImage, has_filter: bool) -> Self {
         Self {
             iter: ScanLineRanges::new(png, has_filter),
@@ -23,22 +23,29 @@ impl<'a> ScanLines<'a> {
 
 impl<'a> Iterator for ScanLines<'a> {
     type Item = ScanLine<'a>;
+
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|(len, pass, num_pixels)| {
-            let (data, rest) = self.raw_data.split_at(len);
-            self.raw_data = rest;
-            let (&filter, data) = if self.has_filter {
-                data.split_first().unwrap()
-            } else {
-                (&0, data)
-            };
-            ScanLine {
-                filter,
-                data,
-                pass,
-                num_pixels,
-            }
+        let (len, pass, num_pixels) = self.iter.next()?;
+        debug_assert!(self.raw_data.len() >= len);
+        debug_assert!(!self.has_filter || len > 1);
+        // The data length should always be correct here but this check assures
+        // the compiler that it doesn't need to account for a potential panic
+        if self.raw_data.len() < len {
+            return None;
+        }
+        let (data, rest) = self.raw_data.split_at(len);
+        self.raw_data = rest;
+        let (&filter, data) = if self.has_filter {
+            data.split_first().unwrap()
+        } else {
+            (&0, data)
+        };
+        Some(ScanLine {
+            filter,
+            data,
+            pass,
+            num_pixels,
         })
     }
 }
@@ -56,13 +63,13 @@ struct ScanLineRanges {
 }
 
 impl ScanLineRanges {
-    pub fn new(png: &PngImage, has_filter: bool) -> Self {
+    pub const fn new(png: &PngImage, has_filter: bool) -> Self {
         Self {
             bits_per_pixel: png.ihdr.bpp(),
             width: png.ihdr.width,
             height: png.ihdr.height,
             left: png.data.len(),
-            pass: if png.ihdr.interlaced == Interlacing::Adam7 {
+            pass: if png.ihdr.interlaced {
                 Some((1, 0))
             } else {
                 None
@@ -74,6 +81,7 @@ impl ScanLineRanges {
 
 impl Iterator for ScanLineRanges {
     type Item = (usize, Option<u8>, usize);
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.left == 0 {
             return None;
@@ -130,7 +138,7 @@ impl Iterator for ScanLineRanges {
                     pixels_per_line += 1;
                 }
                 _ => (),
-            };
+            }
             let current_pass = Some(pass.0);
             if pass.1 + y_steps >= self.height {
                 pass.0 += 1;
@@ -149,7 +157,7 @@ impl Iterator for ScanLineRanges {
             (self.width, None)
         };
         let bits_per_line = pixels_per_line as usize * self.bits_per_pixel;
-        let mut len = (bits_per_line + 7) / 8;
+        let mut len = bits_per_line.div_ceil(8);
         if self.has_filter {
             len += 1;
         }
