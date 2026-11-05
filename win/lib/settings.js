@@ -87,8 +87,10 @@ const DEFAULTS = {
     // the slowest step - ran one file at a time.
     // Measured on a 16-core machine over 30 photos: 2 workers 27.0s, 4 workers
     // 15.0s, 8 workers 12.0s, 16 workers 12.6s. Past eight the optimizers just
-    // contend, so take the core count but stop at eight.
-    MaxWorkers: Math.max(2, Math.min(8, os.cpus().length)),
+    // contend, so take the core count but stop at eight. Only saved when the
+    // user picks a number, so a settings file copied to another PC does not
+    // carry this one's core count with it.
+    MaxWorkers: defaultWorkers(),
 
     // Run Zopfli on everything, with no time budget, the way the macOS app
     // does. Much slower for a fraction of a percent; off by default.
@@ -103,38 +105,159 @@ const DEFAULTS = {
 
     // 'system' follows Windows; 'light' and 'dark' override it for this app.
     Theme: 'system',
+
+    // Ask before quitting or clearing the list throws away the session's
+    // backups, which Revert needs. Stopping files mid-run is always asked.
+    ConfirmDiscardBackups: true,
 };
 
+function defaultWorkers() {
+    const cores = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+    return Math.max(2, Math.min(8, cores));
+}
+
+// What each setting may hold. Values come from settings.json, which anyone can
+// edit, and from the window: a number past its range, or a string where a
+// switch belongs, would otherwise go straight into an optimizer's command
+// line. Anything that does not fit is clamped or, failing that, ignored.
+const bool = { type: 'boolean' };
+const int = (min, max) => ({ type: 'int', min, max });
+const oneOf = (...values) => ({ type: 'enum', values });
+
+const SCHEMA = {
+    LossyEnabled: bool,
+    JpegOptimMaxQuality: int(10, 100),
+    PngMinQuality: int(0, 100),
+    GifQuality: int(0, 100),
+    AdvPngEnabled: bool,
+    AdvPngLevel: int(1, 7),
+    JpegOptimEnabled: bool,
+    JpegTranEnabled: bool,
+    JpegTranStripAll: bool,
+    GuetzliEnabled: bool,
+    OptiPngEnabled: bool,
+    PngCrush2Enabled: bool,
+    PngOutRemoveChunks: bool,
+    ZopfliEnabled: bool,
+    ZopfliSkipAboveKB: int(0, 1024 * 1024),
+    ZopfliMaxSeconds: int(0, 3600),
+    GifsicleEnabled: bool,
+    SvgoEnabled: bool,
+    SvgcleanerEnabled: bool,
+    CwebpEnabled: bool,
+    WebpmuxEnabled: bool,
+    AvifencEnabled: bool,
+    WebPQuality: int(0, 100),
+    AvifQuality: int(0, 100),
+    WebPAvifStripMetadata: bool,
+    QueueOrder: oneOf('smallest', 'largest', 'added'),
+    PreservePermissions: bool,
+    PreserveDates: bool,
+    SkipOptimized: bool,
+    KeepOriginals: bool,
+    MaxWorkers: int(1, 16),
+    ThoroughPng: bool,
+    AccentHue: int(0, 359),
+    AccentSaturation: int(0, 100),
+    Theme: oneOf('system', 'light', 'dark'),
+    ConfirmDiscardBackups: bool,
+};
+
+// The value to store for `key`, or undefined when `value` cannot be one
+function coerce(key, value) {
+    const rule = SCHEMA[key];
+    if (!rule) return undefined;
+    if (rule.type === 'boolean') {
+        if (typeof value === 'boolean') return value;
+        if (value === 0 || value === 1) return Boolean(value);
+        return undefined;
+    }
+    if (rule.type === 'int') {
+        if (typeof value !== 'number' && typeof value !== 'string') return undefined;
+        if (typeof value === 'string' && !value.trim()) return undefined;
+        const n = Number(value);
+        if (!Number.isFinite(n)) return undefined;
+        return Math.min(rule.max, Math.max(rule.min, Math.round(n)));
+    }
+    return rule.values.includes(value) ? value : undefined;
+}
+
+// settings.json format versions. 0: every value written out on the first
+// change (before versions existed), so a default could never change for
+// anyone who had touched a setting. 1: only what differs from the defaults.
+const VERSION = 1;
+
+function migrate(stored) {
+    const values = { ...stored };
+    if (!stored.version) {
+        // Version 0 saved MaxWorkers' default along with everything else,
+        // pinning this PC's core count as though the user had chosen it
+        if (values.MaxWorkers === defaultWorkers()) delete values.MaxWorkers;
+    }
+    delete values.version;
+    return values;
+}
+
+const SAVE_DELAY_MS = 300;
+
 class Settings {
-    constructor(filePath) {
+    // saveDelayMs: how long to wait for more changes before writing. A slider
+    // sends one per step it is dragged through.
+    constructor(filePath, { saveDelayMs = SAVE_DELAY_MS } = {}) {
         this.filePath = filePath;
+        this.saveDelayMs = saveDelayMs;
         this.values = { ...DEFAULTS };
+        this.timer = null;
         this.load();
     }
 
     load() {
+        let stored;
         try {
-            const raw = fs.readFileSync(this.filePath, 'utf8');
-            const stored = JSON.parse(raw);
-            for (const key of Object.keys(DEFAULTS)) {
-                if (Object.prototype.hasOwnProperty.call(stored, key)) {
-                    this.values[key] = stored[key];
-                }
-            }
+            stored = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
         } catch (err) {
             if (err.code !== 'ENOENT') {
                 console.warn('Could not read settings:', err.message);
             }
+            return;
+        }
+        if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return;
+        const values = migrate(stored);
+        for (const key of Object.keys(DEFAULTS)) {
+            if (!Object.prototype.hasOwnProperty.call(values, key)) continue;
+            const value = coerce(key, values[key]);
+            if (value !== undefined) this.values[key] = value;
+        }
+    }
+
+    // Written beside the file and renamed over it, so a crash or a full disk
+    // leaves the old settings or the new ones, never an empty file that
+    // silently resets everything.
+    flush() {
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
+        const changed = { version: VERSION };
+        for (const [key, value] of Object.entries(this.values)) {
+            if (value !== DEFAULTS[key]) changed[key] = value;
+        }
+        const staging = `${this.filePath}.tmp`;
+        try {
+            fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+            fs.writeFileSync(staging, `${JSON.stringify(changed, null, 2)}\n`);
+            fs.renameSync(staging, this.filePath);
+        } catch (err) {
+            console.warn('Could not write settings:', err.message);
+            try { fs.unlinkSync(staging); } catch (e) { /* not there */ }
         }
     }
 
     save() {
-        try {
-            fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-            fs.writeFileSync(this.filePath, JSON.stringify(this.values, null, 2));
-        } catch (err) {
-            console.warn('Could not write settings:', err.message);
-        }
+        if (this.timer) clearTimeout(this.timer);
+        this.timer = setTimeout(() => this.flush(), this.saveDelayMs);
+        // Never the reason the app stays open; flush() runs on quit anyway
+        if (this.timer.unref) this.timer.unref();
     }
 
     get(key) {
@@ -145,10 +268,14 @@ class Settings {
         return { ...this.values };
     }
 
+    // Applies what fits and ignores the rest. Takes effect at once; the file
+    // follows shortly after.
     update(patch) {
-        for (const [key, value] of Object.entries(patch)) {
-            if (Object.prototype.hasOwnProperty.call(DEFAULTS, key)) {
-                this.values[key] = value;
+        if (patch && typeof patch === 'object') {
+            for (const [key, raw] of Object.entries(patch)) {
+                if (!Object.prototype.hasOwnProperty.call(DEFAULTS, key)) continue;
+                const value = coerce(key, raw);
+                if (value !== undefined) this.values[key] = value;
             }
         }
         this.save();
@@ -162,4 +289,4 @@ class Settings {
     }
 }
 
-module.exports = { Settings, DEFAULTS };
+module.exports = { Settings, DEFAULTS, SCHEMA, coerce };

@@ -106,7 +106,67 @@ function createWindow() {
     });
 
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    mainWindow.on('close', (event) => {
+        if (closeConfirmed || !whatClosingLoses()) return;
+        // Asked first. Quitting from the menu ends up here too, since closing
+        // the window is part of quitting, and cancelling it cancels the quit.
+        event.preventDefault();
+        confirmDiscard('quit').then((ok) => {
+            if (!ok) return;
+            closeConfirmed = true;
+            app.quit();
+        });
+    });
     mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+// Set once the user has agreed to what closing loses, or when an update
+// restarts the app (it only does that with the queue idle).
+let closeConfirmed = false;
+
+// What closing the window or clearing the list would throw away: files still
+// being optimized, and the session's backups, which are what Revert restores.
+// Copies in "ImageOptim originals" are the user's and are never deleted.
+function whatClosingLoses() {
+    if (!queue) return null;
+    if (updateController && updateController.state.installing) return null;
+    const busy = queue.isBusy();
+    const revertable = settings.get('ConfirmDiscardBackups') ? queue.revertableCount() : 0;
+    return busy || revertable ? { busy, revertable } : null;
+}
+
+async function confirmDiscard(action) {
+    const loses = whatClosingLoses();
+    if (!loses) return true;
+    const quitting = action === 'quit';
+    const lines = [];
+    if (loses.busy) lines.push('Files are still being optimized. They will be stopped and left as they are.');
+    if (loses.revertable) {
+        const files = loses.revertable === 1 ? '1 optimized file' : `${loses.revertable} optimized files`;
+        lines.push(`${files} can still be restored to the original with Revert. `
+            + `After ${quitting ? 'quitting' : 'clearing the list'} they can’t. `
+            + 'To keep originals for good, turn on Keep originals in Settings → Options.');
+    }
+    const { response, checkboxChecked } = await messageBox({
+        type: 'question',
+        message: quitting ? 'Quit ImageOptim?' : 'Clear the list?',
+        detail: lines.join('\n\n'),
+        buttons: [quitting ? 'Quit' : 'Clear', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+        // Only the Revert part can be silenced; stopping work is always asked
+        ...(loses.busy ? {} : { checkboxLabel: 'Don’t ask again about Revert', checkboxChecked: false }),
+    });
+    if (response !== 0) return false;
+    if (checkboxChecked) settings.update({ ConfirmDiscardBackups: false });
+    return true;
+}
+
+async function clearList() {
+    if (!(await confirmDiscard('clear'))) return false;
+    queue.clear();
+    send('jobs:reset', queue.snapshot());
+    return true;
 }
 
 function send(channel, payload) {
@@ -172,7 +232,7 @@ function buildMenu() {
                 {
                     label: 'Clear List',
                     accelerator: 'CmdOrCtrl+K',
-                    click: () => { queue.clear(); send('jobs:reset', queue.snapshot()); },
+                    click: () => { clearList(); },
                 },
                 { type: 'separator' },
                 { role: 'quit' },
@@ -239,7 +299,7 @@ function registerIpc() {
 
     ipcMain.handle('queue:stop', () => { queue.stop(); return queue.stats(); });
     ipcMain.handle('queue:again', () => { queue.again(); return queue.stats(); });
-    ipcMain.handle('queue:clear', () => { queue.clear(); return queue.snapshot(); });
+    ipcMain.handle('queue:clear', async () => { await clearList(); return queue.snapshot(); });
     ipcMain.handle('queue:snapshot', () => ({ jobs: queue.snapshot(), stats: queue.stats() }));
 
     ipcMain.handle('jobs:remove', (event, ids) => { queue.remove(ids || []); return queue.snapshot(); });
@@ -419,9 +479,16 @@ app.whenReady().then(() => {
 
 // Restart to Update arrives here too: electron-updater starts the installer and
 // then calls app.quit(), and the controller only lets it once the queue is idle.
-app.on('before-quit', () => {
+//
+// will-quit, not before-quit: before-quit comes before the window's close
+// event, where the user can still cancel, and by then the queue would already
+// have been stopped and every backup deleted.
+app.on('will-quit', () => {
     if (queue) queue.stop();
     releaseTempDir();
+    // Writes are put off while a slider is being dragged; the last one must
+    // not be lost on the way out
+    if (settings) settings.flush();
 });
 
 app.on('window-all-closed', () => {

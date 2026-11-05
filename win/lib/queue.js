@@ -413,6 +413,17 @@ class Queue extends EventEmitter {
         return this.running > 0 || this.pending.length > 0;
     }
 
+    // Files whose original exists only as this session's temp copy: Revert can
+    // restore them until the list is cleared or the app quits, and not after.
+    // A copy in "ImageOptim originals" is the user's and outlives both.
+    revertableCount() {
+        let count = 0;
+        for (const job of this.jobs.values()) {
+            if (job.backupPath && !job.backupIsKept) count += 1;
+        }
+        return count;
+    }
+
     runningJobs() {
         return [...this.jobs.values()].filter((job) => job.state === 'running');
     }
