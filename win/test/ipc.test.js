@@ -9,7 +9,8 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+// Line endings as \n whatever the checkout has: git on Windows writes CRLF
+const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8').replace(/\r\n/g, '\n');
 const all = (text, re) => [...text.matchAll(re)].map((m) => m[1]);
 
 const preload = read('preload.js');
