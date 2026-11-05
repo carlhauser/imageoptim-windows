@@ -132,8 +132,20 @@ test('package.json — unsigned updates are accepted, and building never publish
     // electron-updater only verifies a signature when app-update.yml names a
     // publisherName, which electron-builder writes only for a signed build.
     assert.strictEqual(pkg.build.win.verifyUpdateCodeSignature, false);
-    assert.strictEqual(pkg.build.win.publisherName, undefined);
+    // electron-builder 26 takes the publisher from these two; win.publisherName
+    // is not read at all, so checking it alone could never fail
+    for (const key of ['publisherName', 'signtoolOptions', 'azureSignOptions']) {
+        assert.strictEqual(pkg.build.win[key], undefined, key);
+    }
     assert.match(pkg.scripts['dist:win'], /--publish never/);
+});
+
+test('the built app-update.yml names no publisher, so updates are not refused', {
+    skip: !fs.existsSync(path.join(__dirname, '..', 'dist', 'win-unpacked', 'resources', 'app-update.yml')) && 'no packaged build in dist',
+}, () => {
+    const yml = fs.readFileSync(path.join(__dirname, '..', 'dist', 'win-unpacked', 'resources', 'app-update.yml'), 'utf8');
+    assert.doesNotMatch(yml, /publisherName/);
+    assert.match(yml, /provider: github/);
 });
 
 test('package.json — electron-updater is a runtime dependency, so it is packaged', () => {

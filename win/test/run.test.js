@@ -32,7 +32,7 @@ test('the output kept is capped, however much a tool prints', async () => {
 });
 
 test('a program that cannot be started rejects, and leaves no descriptor open', async () => {
-    await assert.rejects(run.runTool({ exe: 'C:\no\such\tool.exe', args: [] }));
+    await assert.rejects(run.runTool({ exe: 'C:\\no\\such\\tool.exe', args: [] }));
 });
 
 test('numberAfter and firstTwoNumbers read what jpegoptim and advpng print', () => {
