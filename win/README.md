@@ -228,7 +228,61 @@ or `added` to keep drop order. Only files that have not started are reordered.
 Without a global cap the two limits multiply - files in flight times optimizers
 per file - and oversubscribe the machine. Measured over thirty photos on a
 16-core machine: 2 workers 27.0s, 4 workers 15.0s, 8 workers 12.0s, 16 workers
-12.6s. The default is the core count capped at eight.
+12.6s. The default is the core count capped at eight; it is only saved once
+someone picks a number, so a settings file moved to another PC does not carry
+this one's core count.
+
+OxiPNG, pngquant, cwebp, avifenc and avifdec each start a thread per core
+unless told otherwise, so eight of them at once ran several times as many
+threads as the PC has. `lib/semaphore.js` hands each tool, as it starts, the
+cores divided among the slots in use (or among all slots while files are
+waiting): `-t` for OxiPNG, `-j` for avifenc and avifdec, `RAYON_NUM_THREADS`
+for OxiPNG and pngquant, and cwebp's `-mt` only with more than one. The last
+file of a batch gets every core. avifenc's `--autotiling` is left off, since
+tiles cost size. Every optimizer runs at below-normal priority, as the macOS
+app's RunLowPriority did, so the PC stays usable.
+
+With fewer files in hand than slots, a step that goes first only because it
+rewrites the file - Zopfli, a lossy JpegOptim pass, Pngcrush stripping - races
+the others on the same input instead, as `Job.m` does; pngquant still feeds
+the others, and webpmux still strips before a lossy re-encode is measured.
+Guetzli runs one at a time across every file, waiting for its turn before it
+takes a slot.
+
+SVGO runs in Electron utility processes that load the bundle once and are
+handed one file after another: the first file took 104 ms including starting
+the process, each one after it 1 ms, against 100-300 ms for the whole Electron
+process that used to be started per SVG.
+
+The window stays responsive with tens of thousands of files. Measured with
+20,000 small PNGs dropped as one folder, before and after the changes that
+made it so:
+
+| | before | after |
+| --- | --- | --- |
+| the list appears | 263 s | 4.6 s |
+| a round trip to the main process while files run | 93 ms, up to 1.2 s | 3 ms, up to 90 ms |
+| Stop | 37 s | 0.6 s |
+| Clear | 30 s | 0.9 s |
+
+Changed files go to the window in batches, at most ten times a second, with
+the totals; the window keeps them in a model and draws only the rows in sight;
+a folder is scanned by its entries' own types, with sizes and resolved paths
+fetched a few dozen at a time; and the list of optimized files is appended
+once a second rather than after every file.
+
+`scripts/bench.mjs` measures the optimizers on a folder of images: bytes saved,
+time and wins per tool, and the current PNG plan against OxiPNG's own Zopfli.
+Over the realistic images in this repository - 33 screenshots, icons, photos,
+GIFs and WebPs - OxiPNG with `-o max -Z` saved 0.3 KB on the PNGs Zopfli runs
+on, against 6.8 KB for Zopfli followed by OxiPNG and AdvPNG, and took longer,
+so the plan stays. Most of those images were optimized already; the interlaced
+Gifsicle pass won none of three GIFs, too few to drop it on. The script is
+there for larger, real image sets.
+
+```sh
+cd win && node scripts/bench.mjs <folder>
+```
 
 ## Tests
 
@@ -270,8 +324,26 @@ unless a directory of them is given:
 cd win && IMAGEOPTIM_BIN=/path/to/bin npm test
 ```
 
-CI runs the stubbed suite on Linux for every push to `win/`, and the binary
-checks on Windows against the executables each build has just produced.
+`binaries.test.js` also runs every optimizer on a path longer than 260
+characters with Chinese and an emoji in it, and checks that what each real tool
+writes passes `lib/validate.js`. The rest of the suite covers settings
+validation and migration (`settings.test.js`), the shared slots and thread
+budget (`semaphore.test.js`), starting and stopping a tool (`run.test.js`), the
+command line (`argv.test.js`), the window's channel names (`ipc.test.js`) and
+the log's path scrubbing (`log.test.js`).
+
+CI runs the stubbed suite on Linux and Windows for every push and pull request
+that touches `win/`, and the binary checks on Windows against the executables
+each build has just produced.
+
+`scripts/smoke.mjs` runs a packaged build the way a user does - image files on
+its command line, results in the files - since the packaged app cannot be
+debugged from outside. One image of each format has to come out smaller and
+whole, the SVG through SVGO from inside `app.asar`:
+
+```sh
+cd win && npm run pack && node scripts/smoke.mjs
+```
 
 ## Continuous integration
 
@@ -281,6 +353,16 @@ electron-builder. It runs on demand and on changes to `build-windows.ps1` or
 `win/`, excluding markdown, because Windows runners bill at twice the rate. A
 `v*` tag runs it too, and then it also publishes a GitHub Release; see
 [Releasing](#releasing).
+
+The optimizers' own source folders start a build too. Optimizers built from
+unchanged sources are reused from the cache, keyed on a hash of the sources and
+`build-windows.ps1`, and so are Electron's downloads; a tag always builds from
+scratch and restores nothing. After packaging, the job reads the fuses, checks
+`svgo.js` is inside `app.asar`, runs `scripts/smoke.mjs` on the unpacked app,
+then installs it silently, runs the smoke test on the installed copy and
+uninstalls it. `npm audit` checks the packages the app ships. Every action is
+pinned to the commit behind its tag, checkouts keep no credentials, and
+Dependabot proposes updates.
 
 The AOM library is cached between runs with `actions/cache`, keyed on a hash of
 `aom/**`. The build script checks the stamp in the restored prefix as it does
@@ -365,6 +447,20 @@ directory on PATH: the full test suite including the binary checks, and an
 optimize run over PNG, JPEG, GIF and SVG samples with every result decoded
 afterwards.
 
+The window's renderer is sandboxed, with context isolation and no Node: the
+preload hands it a narrow API, and every IPC handler checks the call comes from
+the app's own page in its own window, and checks what it is given. The window
+cannot navigate, open windows or attach webviews, and no permission is granted
+to anything. The packaged app's Electron fuses turn off `ELECTRON_RUN_AS_NODE`,
+`NODE_OPTIONS` and `--inspect`, and make it load only from `app.asar`, whose
+integrity is checked; it refuses `--remote-debugging-port`, which no fuse
+reaches, and ignores `IMAGEOPTIM_BIN`. Only the en-US Chromium locale ships.
+
+What goes wrong is written to `logs\main.log` in the user-data folder (Help →
+Open Log Folder): optimizer runs that exit with an unexpected code, timeouts,
+damaged results, crashes of the window or a child process, and uncaught errors.
+Paths are taken out first. Crash dumps stay on the PC.
+
 The page declares `color-scheme: light dark`, without which Chromium draws its
 native controls - scrollbars, sliders, checkboxes, the select - in the light
 scheme even in a dark window. Scrollbars use the standard `scrollbar-width` and
@@ -376,9 +472,11 @@ The UI font is Inter, bundled in `renderer/fonts/` (from
 app looks the same on machines without it installed; anything outside Inter's
 scripts falls back to Segoe UI. The icons are Microsoft's Fluent UI System
 Icons (MIT), copied into `renderer/icons/` and drawn as CSS masks so they take
-the text or accent colour. The accent colour is a hue and saturation from
-Settings → Appearance; `style.css` derives every shade from them in OKLCH at
-fixed lightnesses, so text keeps its contrast whichever colour is picked. The
+the text or accent colour. The accent colour is Windows' own, or a hue and
+saturation picked in Settings → Appearance; `style.css` derives every shade
+from them in OKLCH at fixed lightnesses, so text keeps its contrast whichever
+colour it is. In Windows' contrast themes every state has a system colour of
+its own, and with reduced motion nothing spins. The
 Theme setting there sets Electron's `nativeTheme.themeSource`, which drives
 `prefers-color-scheme` in the page and the native controls alike.
 
@@ -401,10 +499,38 @@ size and modification time it had when the optimizers started: if another progra
 changed it in the meantime the save is refused, because the result was derived
 from the old bytes and the backup would be of the old bytes too.
 
-Each original is copied to a scratch directory before being replaced, and Revert
-restores from there through the same atomic path. That directory is created with
-`mkdtemp`, swept at startup and removed at quit, and a job's backup is deleted
-when it leaves the list.
+Antivirus scanners, the search indexer, OneDrive and viewers hold a file open
+for a moment after it changes, and Windows then refuses the rename. It is
+retried up to eight times over about 1.4 s before the save falls back to
+copying over the original, which some network volumes need. If that copy fails
+partway, the original is put back from its backup; if even that fails, the
+backup is saved beside the file as `name (ImageOptim backup).ext`, or in the
+home folder, and the error says where. A staging copy that fails for lack of
+space never falls back at all. `save()` stays synchronous on purpose, so Stop,
+Clear and quitting cannot land halfway through a write.
+
+Before any of that, the result has to look like a whole image: a PNG signature,
+IHDR and the closing IEND; a JPEG that ends in its EOI marker; a GIF that ends
+with its trailer; a WebP whose RIFF length is the file's; AVIF boxes that add up
+to the file exactly; an SVG that closes its root (`lib/validate.js`). A tool can
+exit 0 with a truncated file, and smaller is all the app used to ask. Each run
+also has a time limit, counted from when it gets a slot, and a full disk is
+reported as one rather than as "no improvement". Whether a file can be written
+is tested by opening it, since `fs.access` on Windows sees only the read-only
+flag; a read-only file says so.
+
+Each original is kept in a scratch directory before being replaced, and Revert
+restores from there through the same atomic path. Where the scratch directory
+is on the file's drive and the file has no other names, the backup is a hard
+link: no copying, and once the optimized file is renamed over the original the
+link is all that holds the old data. The one path that writes straight into the
+original gives a linked backup data of its own first. Backups still take space,
+so past 2 GB of them a newly optimized file keeps none, cannot be reverted, and
+never keeps a backup of a later result, which Revert would otherwise put back
+as though it were the original. The directory is created with `mkdtemp`, swept
+a few seconds after startup and removed at quit, a job's backup is deleted when
+it leaves the list, and closing the window or clearing the list asks first
+while files could still be reverted.
 
 With **Keep originals** on (Settings → Options, off by default) the copy goes
 into an `ImageOptim originals` folder beside the file instead, with the
@@ -413,8 +539,10 @@ original's dates, and stays there. `lib/originals.js` holds the rules:
 * The copy is made before anything is written, and if it can't be made the save
   is refused: a file is never overwritten without its copy.
 * Only files that actually got smaller are copied, so already-optimal files
-  leave no folder behind. A file this app produced itself (it is in the list of
-  optimized files below) is not copied again as if it were an original.
+  leave no folder behind. A file this app produced itself is not copied again
+  as if it were an original: the list of optimized files marks content the app
+  wrote, as distinct from a file it only found to be optimal already, which is
+  still somebody's untouched original.
 * A same-named file already in the folder is never replaced: an identical one
   is reused, a different one makes the copy `name (2).png`.
 * Clearing the list never deletes a kept original. Revert moves the copy back
@@ -423,7 +551,8 @@ original's dates, and stays there. `lib/originals.js` holds the rules:
   since. A copy that was already there before the run is copied back and left
   in place.
 * Folders named `ImageOptim originals` are never searched when a folder is
-  added, and a file inside one is listed with the reason it was left alone.
+  added, and a file inside one is listed with a note saying why it was left
+  alone.
 
 ## Differences from the macOS app
 
@@ -497,13 +626,33 @@ about how long is left. `lib/eta.js` works this out:
 * Each running row has a line along its bottom over a faint track that shows
   where it ends. It follows the same estimate and never moves backwards.
 
+The list is a grid: one tab stop, and the keys below. Right-clicking a row, or
+the Menu key, opens a menu for the selected files - Open, Show in Explorer,
+Copy Path, Optimize Again, Stop, Restore Original, Remove from List - and the
+Edit menu has the same commands. Each heading sorts by its column. A running
+file shows which optimizers are at work, how many are done and for how long,
+and has a Stop button of its own; a failed one says what happened in words,
+and an optimizer that crashed, hung or wrote a damaged file marks its row. The
+status bar counts the failures, and clicking the count shows only them.
+
 | | |
 | --- | --- |
-| Double-click a row | show the file in Explorer |
+| Double-click a row, or Enter | show the file in Explorer |
+| Arrows, Page Up/Down, Home, End | move through the list; with Shift, select a range |
+| Ctrl+A | select every file in the tab |
 | Delete | remove the selected rows from the list |
 | Ctrl+Z | revert the selected files to their originals |
+| Ctrl+Shift+C | copy the selected files' paths |
+| Ctrl+F | filter the list by name, or show only failed files |
 | Ctrl+R | optimize everything again, one effort level higher, already optimized files included |
 | Ctrl+. | stop |
+| Ctrl+L | lossy minification on or off |
+| Ctrl+, | settings |
+
+When a batch ends with the window in the background, its taskbar button
+flashes, and a batch that took more than ten seconds ends with a Windows
+notification. The taskbar bar turns red while files have failed, and the PC
+does not go to sleep while files are being optimized.
 
 Files are overwritten in place. Turn on Keep originals, or keep a copy of
 anything you cannot regenerate.
@@ -555,7 +704,11 @@ writes one only for a signed build; `win.verifyUpdateCodeSignature: false` in
 `package.json` makes that explicit. The download is instead checked against the
 sha512 in `latest.yml`, which comes over HTTPS from the same release - so anyone
 who can publish a release on the repository can ship code to every installed
-copy, and write access to it should be treated accordingly.
+copy, and write access to it should be treated accordingly: the `release`
+environment's required reviewer, a ruleset that restricts who may push `v*`
+tags, and GitHub's immutable releases are the repository settings that guard
+it, and signing (SignPath's free program for open source, or Azure Trusted
+Signing) would let the updater check the publisher itself.
 
 The updater downloads with Electron's own network stack, so the installer has
 no mark of the web and SmartScreen does not stop it; the blue "Windows protected
@@ -594,10 +747,17 @@ installed from then on accept only updates signed by the same publisher.
    | `ImageOptim-0.2.0-win.zip` | the portable copy |
    | `ImageOptim-Setup-0.2.0.exe.blockmap` | for the updater: differential downloads |
    | `latest.yml` | for the updater: version, file name, sha512 |
+   | `SHA256SUMS.txt` | checksums of the installer, the zip and `latest.yml` |
 
-   Release notes are generated from the commits since the previous tag and can
-   be edited on GitHub afterwards. Installed copies pick the release up by
-   themselves within a few seconds of their next start.
+   along with a build provenance attestation for the installer, the zip and
+   `latest.yml`, which `gh attestation verify` checks. Release notes are
+   generated from the commits since the previous tag and can be edited on
+   GitHub afterwards. Installed copies pick the release up by themselves
+   within a few seconds of their next start.
+
+   The `release` job runs in the `release` environment. With a required
+   reviewer set on it (repository Settings → Environments), nothing reaches
+   installed copies until that reviewer approves the run.
 
 The push to `main` starts a second Windows build of the same commit, because
 `win/package.json` changed. Only the tag's run publishes anything, so the other
@@ -607,9 +767,11 @@ A release is published only when every job succeeded. The packaging job still
 runs after a partial optimizer build, so its artifacts can be inspected, but a
 release with missing optimizers is not something to hand out - least of all
 once the updater is on and installed copies take releases unattended.
-Re-running the workflow for a tag replaces that release's files rather than
-failing. The updater never downgrades, so a bad release is fixed by releasing a
-higher version.
+A release that is already published is never touched again: re-running the
+workflow for its tag fails rather than replace its files, which would hand
+installed copies different bytes under the same version. Only a draft left by
+a failed attempt is completed. The updater never downgrades, so a bad release
+is fixed by releasing a higher version.
 
 The installer is named without spaces (`nsis.artifactName`). GitHub turns spaces
 in asset names into dots while `latest.yml` names a dashed copy, so an

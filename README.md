@@ -28,6 +28,14 @@ is left. The time is learned from the files as they finish. Files an earlier
 run already optimized, in this session or a past one, are recognised by their
 content and go straight to Skipped, left as they are.
 
+A running file says which optimizer is at work and for how long. A file that
+could not be optimized says why, in words, and the status bar counts the
+failures. Right-click a file, or select several, to open it, show it in
+Explorer, copy its path, optimize it again, stop it, restore the original or
+take it off the list; the column headings sort, and Ctrl+F filters. It stays
+quick with tens of thousands of files, and works with the keyboard alone, with
+a screen reader and in Windows' contrast themes.
+
 ![Two large PNGs still running, each row's line over its track, and the bar and time left along the bottom](docs/screenshots/progress-light.png)
 
 ![The Done list after a run, showing per-file savings and which optimizer won](docs/screenshots/results-light.png)
@@ -38,19 +46,20 @@ Appearance.
 ![The same list in dark mode](docs/screenshots/results-dark.png)
 
 Settings has three tabs:
-- **Optimizers** switches each optimizer on and off and shows which are
-  installed.
+- **Formats** has a card for each format: its optimizers, whether its
+  metadata is stripped and, with lossy minification on, its quality. It also
+  shows which optimizers are installed.
 - **Options** has:
-  - lossy quality per format;
-  - metadata stripping;
-  - how hard to work;
+  - lossy minification;
   - **Keep originals**;
-  - whether to skip files already optimized.
+  - whether to skip files already optimized;
+  - the queue order and how hard to work.
 
-![The settings panel on its Optimizers tab](docs/screenshots/settings-dark.png)
+![The settings panel on its Formats tab](docs/screenshots/settings-dark.png)
 
-**Appearance** picks the theme and the accent colour, a hue and a saturation
-slider that every shade in the window follows, here set to purple.
+**Appearance** picks the theme and the accent colour: Windows' own, or a hue
+and a saturation slider that every shade in the window follows, here set to
+purple.
 
 ![The settings panel on its Appearance tab, with a purple accent](docs/screenshots/settings-appearance-light.png)
 
@@ -93,7 +102,7 @@ with MinGW-w64 under MSYS2, and `win/` packages the app around them. See
 plans and the Zopfli size threshold were derived.
 
 The screenshots above were taken on Windows 11 from a real run, and were
-themselves optimized by this build: 36.6% smaller, Zopfli winning all five.
+themselves optimized by this build: 37.3% smaller, Zopfli winning all five.
 
 ---
 
