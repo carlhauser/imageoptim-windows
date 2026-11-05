@@ -45,6 +45,17 @@ test('pngquant — PngquantWorker.m', async () => {
         ['256', '--skip-if-larger', '-s3', '--quality', '80-100', '-']);
 });
 
+test('pngquant — speed stays within the 1..10 it accepts at the highest efforts', async () => {
+    // Effort 7, and 6 or 7 plus Optimize Again, used to give -s0 and -s-1,
+    // which pngquant refuses: lossy PNG then did nothing at all.
+    for (const level of [6, 7, 8]) {
+        const { args } = await captureArgs('pngquant', {
+            settings: { LossyEnabled: true, PngMinQuality: 80 }, level,
+        });
+        assert.strictEqual(args[2], '-s1', `level ${level}`);
+    }
+});
+
 test('pngquant — reads stdin and writes stdout', async () => {
     const { options, inputPath, tempPath } = await captureArgs('pngquant', {
         settings: { LossyEnabled: true },

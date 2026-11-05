@@ -54,7 +54,10 @@ const pngquant = {
     async run(ctx) {
         const minQuality = ctx.settings.PngMinQuality;
         const maxQuality = Math.min(100, minQuality + 20);
-        const speed = Math.min(3, 7 - ctx.level);
+        // MIN(3, 7 - level) as in PngquantWorker.m, but never below 1: the
+        // effort slider reaches 7, and Again adds one, and pngquant rejects
+        // -s0 and -s-1 outright, which turned lossy PNG off without a word.
+        const speed = Math.max(1, Math.min(3, 7 - ctx.level));
 
         const args = [
             '256', '--skip-if-larger',
