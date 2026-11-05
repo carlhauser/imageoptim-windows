@@ -52,10 +52,8 @@ const lossy = [
     'removeUselessStrokeAndFill',
 ];
 
-try {
-    const useLossy = process.argv[2];
-    const inFile = process.argv[3];
-    const outFile = process.argv[4];
+// Optimizes inFile into outFile. Throws if svgo cannot.
+function optimizeFile(useLossy, inFile, outFile) {
     const svgstr = fs.readFileSync(inFile, 'utf8');
 
     const plugins = useLossy == "1" ? defaults.concat(lossy) : defaults;
@@ -72,12 +70,32 @@ try {
     });
 
     if (!result || typeof result.data !== 'string') {
-        console.error("svgo produced no output");
-        process.exit(1);
+        throw new Error("svgo produced no output");
     }
 
     fs.writeFileSync(outFile, result.data);
-} catch (err) {
-    console.error(err);
-    process.exit(1);
+}
+
+if (process.parentPort) {
+    // Started by the Windows app as an Electron utility process, which keeps
+    // it and sends it one file after another: the bundle is loaded once, not
+    // for every SVG. Each message is { id, lossy, input, output }; the reply
+    // says whether it worked.
+    process.parentPort.on('message', (event) => {
+        const { id, lossy: useLossy, input, output } = event.data;
+        try {
+            optimizeFile(useLossy ? "1" : "0", input, output);
+            process.parentPort.postMessage({ id, ok: true });
+        } catch (err) {
+            process.parentPort.postMessage({ id, ok: false, error: String((err && err.message) || err) });
+        }
+    });
+} else {
+    // A command line: svgo.js <lossy 0|1> <input> <output>
+    try {
+        optimizeFile(process.argv[2], process.argv[3], process.argv[4]);
+    } catch (err) {
+        console.error(err);
+        process.exit(1);
+    }
 }

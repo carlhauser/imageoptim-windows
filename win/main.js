@@ -9,6 +9,7 @@ const { Queue } = require('./lib/queue');
 const { History } = require('./lib/history');
 const { sweepTempDirs, releaseTempDir } = require('./lib/job');
 const updates = require('./lib/updater');
+const svgo = require('./lib/svgo');
 
 // Long enough that the first check does not compete with startup.
 const UPDATE_CHECK_DELAY_MS = 3000;
@@ -485,6 +486,7 @@ app.whenReady().then(() => {
 // have been stopped and every backup deleted.
 app.on('will-quit', () => {
     if (queue) queue.stop();
+    svgo.stopAll();
     releaseTempDir();
     // Writes are put off while a slider is being dragged; the last one must
     // not be lost on the way out

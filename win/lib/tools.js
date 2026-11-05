@@ -5,6 +5,7 @@ const path = require('path');
 // Imported as a namespace rather than destructured so tests can substitute
 // runTool and capture the exact argv each optimizer would be given.
 const run = require('./run');
+const svgoRunner = require('./svgo');
 const { PNG, JPEG, GIF, SVG, WEBP, AVIF, isSmall, isLarge } = require('./filetype');
 
 // One entry per optimizer, ported from imageoptim/Backend/Workers/*.m. The
@@ -385,15 +386,14 @@ const svgo = {
     lossy: false,
     enabled: (s) => s.SvgoEnabled,
     async run(ctx) {
-        // svgo.js is a webpack bundle, not an executable. Electron's own binary
-        // runs it as Node when ELECTRON_RUN_AS_NODE is set, so the installer does
-        // not have to ship a separate Node runtime.
-        const lossy = ctx.settings.LossyEnabled ? '1' : '0';
-        const { code } = await run.runTool({
-            exe: process.execPath,
-            args: [ctx.script, lossy, ctx.input.path, ctx.temp],
+        // svgo.js is a webpack bundle, not an executable: lib/svgo.js runs it
+        // in Electron's utility processes, so the installer ships no Node
+        const { code } = await svgoRunner.optimize({
+            script: ctx.script,
+            lossy: Boolean(ctx.settings.LossyEnabled),
+            input: ctx.input.path,
+            output: ctx.temp,
             signal: ctx.signal,
-            env: { ELECTRON_RUN_AS_NODE: '1' },
         });
         if (code !== 0) return null;
         return { size: statSize(ctx.temp), label: ctx.settings.LossyEnabled ? 'SVGO' : 'SVGO lite' };
