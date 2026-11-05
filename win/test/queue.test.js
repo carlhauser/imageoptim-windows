@@ -332,3 +332,40 @@ test('a folder still being scanned when Stop is pressed adds nothing', async () 
     assert.deepStrictEqual(await adding, { added: 0, truncated: false });
     assert.strictEqual(queue.jobs.size, 0);
 });
+
+// --------------------------------------------------- commands on chosen files
+
+test('againIds queues only the files asked for', async () => {
+    const root = tree('againids', (r) => {
+        for (const name of ['a.png', 'b.png', 'c.png']) fs.writeFileSync(path.join(r, name), 'x'.repeat(100));
+    });
+    const settings = new Settings(path.join(scratch(), 'againids.json'));
+    settings.reset();
+    const queue = new Queue({ settings, binDir: path.join(scratch(), 'nobin') });
+    queue.start = () => {};
+    await queue.add([root]);
+    for (const job of queue.jobs.values()) { job.waiting = false; job.setState('done'); }
+    queue.pending.length = 0;
+    const a = queue.find(path.join(root, 'a.png'));
+    queue.againIds([a.id, 'not-in-the-list']);
+    assert.deepStrictEqual(queue.pending, [a]);
+    assert.strictEqual(a.force, true);
+});
+
+test('stopIds stops a waiting file and leaves the others queued', async () => {
+    const root = tree('stopids', (r) => {
+        for (const name of ['a.png', 'b.png']) fs.writeFileSync(path.join(r, name), 'x'.repeat(100));
+    });
+    const settings = new Settings(path.join(scratch(), 'stopids.json'));
+    settings.reset();
+    const queue = new Queue({ settings, binDir: path.join(scratch(), 'nobin') });
+    queue.start = () => {};
+    await queue.add([root]);
+    const a = queue.find(path.join(root, 'a.png'));
+    const b = queue.find(path.join(root, 'b.png'));
+    queue.stopIds([a.id]);
+    assert.strictEqual(a.state, 'stopped');
+    assert.strictEqual(a.waiting, false);
+    assert.deepStrictEqual(queue.pending, [b]);
+    assert.strictEqual(b.state, 'queued');
+});

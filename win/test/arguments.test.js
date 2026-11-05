@@ -401,3 +401,11 @@ test('avifenc and avifdec — -j with a thread budget', async () => {
         assert.ok(at < call.args.indexOf('--'), 'before the file names');
     }
 });
+
+test('pngquant — a palette that saves under 5% is not worth the loss', async () => {
+    const small = await captureArgs('pngquant', { settings: { LossyEnabled: true }, size: 4096, outSize: 4000 });
+    assert.strictEqual(small.result, null, '2% smaller: declined');
+    const big = await captureArgs('pngquant', { settings: { LossyEnabled: true }, size: 4096, outSize: 2000 });
+    assert.strictEqual(big.result.size, 2000);
+    assert.strictEqual(big.result.lossy, true);
+});

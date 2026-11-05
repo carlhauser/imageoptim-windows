@@ -23,13 +23,17 @@ contextBridge.exposeInMainWorld('imageoptim', {
     clear: () => ipcRenderer.invoke('queue:clear'),
     snapshot: () => ipcRenderer.invoke('queue:snapshot'),
 
-    removeJobs: (ids) => ipcRenderer.invoke('jobs:remove', ids),
-    reveal: (id) => ipcRenderer.invoke('job:reveal', id),
-    revert: (id) => ipcRenderer.invoke('job:revert', id),
+    // open | reveal | copy | again | stop | revert | remove, on files by id
+    jobCommand: (command, ids) => ipcRenderer.invoke('jobs:command', command, ids),
+    showJobMenu: (ids) => ipcRenderer.invoke('jobs:menu', ids),
+    onRemoved: (handler) => ipcRenderer.on('jobs:removed', (event, ids) => handler(ids)),
+    // The Edit menu's commands, which act on the selection the window has
+    onMenuCommand: (handler) => ipcRenderer.on('menu:command', (event, command) => handler(command)),
 
     getSettings: () => ipcRenderer.invoke('settings:get'),
     setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
     resetSettings: () => ipcRenderer.invoke('settings:reset'),
+    onSettingsChanged: (handler) => ipcRenderer.on('settings:changed', (event, values) => handler(values)),
     listTools: () => ipcRenderer.invoke('tools:list'),
     historyStats: () => ipcRenderer.invoke('history:stats'),
     forgetHistory: () => ipcRenderer.invoke('history:forget'),

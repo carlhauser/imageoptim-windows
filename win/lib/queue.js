@@ -124,6 +124,7 @@ async function expandPaths(inputPaths, { limit = 20000, signal = null, onProgres
     const seenDirs = new Set();
     const pending = [...inputPaths]; // folders, and anything not yet looked at
     let truncated = false;
+    let ignored = 0; // files that are not images, to say so when nothing else came
 
     const addFile = (filePath) => {
         const key = path.resolve(filePath);
@@ -149,6 +150,7 @@ async function expandPaths(inputPaths, { limit = 20000, signal = null, onProgres
 
         if (stat.isFile()) {
             if (isImageName(current)) addFile(current);
+            else ignored += 1;
             continue;
         }
         if (!stat.isDirectory()) continue;
@@ -173,6 +175,7 @@ async function expandPaths(inputPaths, { limit = 20000, signal = null, onProgres
             const entryPath = path.join(current, entry.name);
             if (entry.isFile()) {
                 if (isImageName(entry.name)) addFile(entryPath);
+                else ignored += 1;
             } else if (entry.isDirectory()) {
                 // Kept originals are never optimized (Keep originals)
                 if (!isOriginalsDir(entry.name)) pending.push(entryPath);
@@ -186,6 +189,7 @@ async function expandPaths(inputPaths, { limit = 20000, signal = null, onProgres
     }
 
     files.truncated = truncated;
+    files.ignored = ignored;
     return files;
 }
 
@@ -265,7 +269,9 @@ class Queue extends EventEmitter {
         const files = await expandPaths(inputPaths, {
             onProgress: (found) => this.emit('scan', { found, done: false }),
         });
-        this.emit('scan', { found: files.length, done: true, truncated: Boolean(files.truncated) });
+        this.emit('scan', {
+            found: files.length, ignored: files.ignored || 0, done: true, truncated: Boolean(files.truncated),
+        });
         if (stale()) return { added: 0, truncated: false };
 
         // Each file's identity and size, a few dozen at a time
@@ -300,7 +306,13 @@ class Queue extends EventEmitter {
                     // shown, so it's clear why nothing happened to it
                     job.unreadable = true;
                     job.blocked = true;
-                    job.setState('error', `In “${ORIGINALS_DIR}”, so left as it is`);
+                    if (stat) job.originalSize = job.bestSize = stat.size;
+                    // A note, not an error: nothing went wrong
+                    job.note = {
+                        text: `In “${ORIGINALS_DIR}”`,
+                        detail: 'A copy Keep originals saved. Files in that folder are never optimized.',
+                    };
+                    job.setState('done');
                     added.push(job);
                     continue;
                 }
@@ -482,6 +494,44 @@ class Queue extends EventEmitter {
         this.start();
     }
 
+    // Optimize Again for chosen files only - the right-click menu, or the
+    // files under Skipped - rather than the whole list
+    againIds(ids) {
+        for (const id of ids) {
+            const job = this.jobs.get(id);
+            if (!job || job.isRunning || job.waiting || job.blocked || job.unreadable) continue;
+            job.force = true;
+            this.enqueue(job);
+        }
+        this.sortPending();
+        this.start();
+    }
+
+    // Stops chosen files: those waiting leave the queue, those running are
+    // stopped where they are, and the rest carry on.
+    stopIds(ids) {
+        const stopped = new Set();
+        for (const id of ids) {
+            const job = this.jobs.get(id);
+            if (!job) continue;
+            if (job.waiting) {
+                job.waiting = false;
+                stopped.add(job);
+                this.batch.drop(id);
+                job.setState('stopped');
+            }
+            const controller = this.controllers.get(id);
+            if (controller) controller.abort();
+        }
+        if (stopped.size) this.pending = this.pending.filter((job) => !stopped.has(job));
+        this.emit('progress');
+        // Nothing running to settle and announce it: the queue is idle now
+        if (!this.isBusy()) {
+            this.batch.end();
+            this.emit('idle', this.stats());
+        }
+    }
+
     revert(id) {
         const job = this.jobs.get(id);
         if (!job) return { ok: false, reason: 'that file is no longer in the list' };
@@ -522,6 +572,8 @@ class Queue extends EventEmitter {
         let optimized = 0;
         let busy = 0;
         let skipped = 0;
+        let failed = 0;
+        let maxPercent = 0;
 
         for (const job of this.jobs.values()) {
             originalTotal += job.originalSize;
@@ -529,6 +581,8 @@ class Queue extends EventEmitter {
             if (job.isOptimized) optimized += 1;
             if (job.state === 'running' || job.state === 'queued') busy += 1;
             if (job.state === 'skipped') skipped += 1;
+            if (job.state === 'error') failed += 1;
+            maxPercent = Math.max(maxPercent, job.percentOptimized);
         }
 
         return {
@@ -536,6 +590,8 @@ class Queue extends EventEmitter {
             optimized,
             busy,
             skipped,
+            failed,
+            maxPercent,
             running: this.running,
             queued: this.pending.length,
             originalTotal,

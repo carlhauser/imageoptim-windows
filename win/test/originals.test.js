@@ -215,8 +215,9 @@ test('a file inside an originals folder is listed, refused, and Again leaves it'
     queue.start = () => {};
     await queue.add([kept]);
     const job = queue.find(kept);
-    assert.strictEqual(job.state, 'error');
-    assert.match(job.error, /ImageOptim originals/);
+    // Shown with a note saying why, not as a failure
+    assert.strictEqual(job.state, 'done');
+    assert.match(job.note.text, /ImageOptim originals/);
     assert.strictEqual(queue.pending.length, 0);
     queue.again();
     assert.strictEqual(queue.pending.length, 0);

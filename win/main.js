@@ -2,7 +2,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme } = require('electron');
+const {
+    app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, clipboard,
+    Notification, powerSaveBlocker, screen,
+} = require('electron');
 
 const { Settings } = require('./lib/settings');
 const { Queue } = require('./lib/queue');
@@ -88,10 +91,40 @@ function applyTheme() {
     if (mainWindow) mainWindow.setBackgroundColor(windowBackground());
 }
 
+// Where the window was, so it opens there again. Kept only if it still lands
+// on a display: a monitor unplugged since would leave it off screen.
+const WINDOW_STATE = () => path.join(app.getPath('userData'), 'window.json');
+
+function savedBounds() {
+    try {
+        const saved = JSON.parse(fs.readFileSync(WINDOW_STATE(), 'utf8'));
+        const { x, y, width, height } = saved;
+        if (![x, y, width, height].every(Number.isFinite)) return null;
+        const area = screen.getDisplayMatching({ x, y, width, height }).workArea;
+        const visible = x < area.x + area.width - 80 && x + width > area.x + 80
+            && y >= area.y - 10 && y < area.y + area.height - 60;
+        return visible ? { x, y, width, height, maximized: Boolean(saved.maximized) } : null;
+    } catch (err) {
+        return null;
+    }
+}
+
+function saveBounds() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+        const bounds = mainWindow.getNormalBounds();
+        fs.writeFileSync(WINDOW_STATE(), JSON.stringify({ ...bounds, maximized: mainWindow.isMaximized() }));
+    } catch (err) {
+        /* next time it opens where Windows puts it */
+    }
+}
+
 function createWindow() {
+    const bounds = savedBounds();
     mainWindow = new BrowserWindow({
         width: 820,
         height: 580,
+        ...(bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : {}),
         // The layout adapts down to this (see the width queries in style.css)
         minWidth: 420,
         minHeight: 360,
@@ -106,9 +139,15 @@ function createWindow() {
         },
     });
 
+    if (bounds && bounds.maximized) mainWindow.maximize();
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    // A finished batch flashes the taskbar button until the window is looked at
+    mainWindow.on('focus', () => mainWindow.flashFrame(false));
     mainWindow.on('close', (event) => {
-        if (closeConfirmed || !whatClosingLoses()) return;
+        if (closeConfirmed || !whatClosingLoses()) {
+            saveBounds();
+            return;
+        }
         // Asked first. Quitting from the menu ends up here too, since closing
         // the window is part of quitting, and cancelling it cancels the quit.
         event.preventDefault();
@@ -180,16 +219,69 @@ function send(channel, payload) {
 
 // The taskbar button fills up with the same fraction as the bar along the
 // bottom of the window. It pulses until there is anything to show.
-function showTaskbarProgress(batch) {
+// Red while any file in the list has failed, as Explorer's copy dialog does
+function showTaskbarProgress(batch, failed = false) {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (!batch) mainWindow.setProgressBar(-1);
     else if (batch.estimating && !batch.done) mainWindow.setProgressBar(0, { mode: 'indeterminate' });
-    else mainWindow.setProgressBar(Math.max(0.01, batch.fraction));
+    else mainWindow.setProgressBar(Math.max(0.01, batch.fraction), { mode: failed ? 'error' : 'normal' });
 }
 
 function sendProgress(stats) {
     send('queue:progress', stats);
-    showTaskbarProgress(stats.batch);
+    showTaskbarProgress(stats.batch, stats.failed > 0);
+    if (stats.batch) batchBegan();
+}
+
+// ------------------------------------------------------- a batch from start to end
+//
+// While files are being optimized the PC is kept from going to sleep under
+// them. When the queue runs dry with the window in the background, its
+// taskbar button flashes; a batch that took a while also ends with a Windows
+// notification saying how it went.
+const NOTIFY_AFTER_MS = 10000;
+let batchStartedAt = 0;
+let sleepBlocker = null;
+
+function batchBegan() {
+    if (batchStartedAt) return;
+    batchStartedAt = Date.now();
+    if (sleepBlocker === null) sleepBlocker = powerSaveBlocker.start('prevent-app-suspension');
+}
+
+function batchEnded(stats) {
+    const took = batchStartedAt ? Date.now() - batchStartedAt : 0;
+    batchStartedAt = 0;
+    if (sleepBlocker !== null) {
+        powerSaveBlocker.stop(sleepBlocker);
+        sleepBlocker = null;
+    }
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return;
+    mainWindow.flashFrame(true);
+    if (took < NOTIFY_AFTER_MS || !Notification.isSupported()) return;
+
+    const parts = [`${stats.files.toLocaleString()} file${stats.files === 1 ? '' : 's'}`];
+    parts.push(stats.savedBytes
+        ? `saved ${formatBytes(stats.savedBytes)} (${stats.savedPercent.toFixed(1)}%)`
+        : 'nothing to save');
+    if (stats.failed) parts.push(`${stats.failed.toLocaleString()} failed`);
+    const notification = new Notification({
+        title: stats.failed ? 'ImageOptim finished, with failures' : 'ImageOptim finished',
+        body: parts.join(' · '),
+        silent: true,
+    });
+    notification.on('click', () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+    });
+    notification.show();
+}
+
+function formatBytes(bytes) {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`;
+    if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+    return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
 // Changes reach the window in batches. A file sends several changes as its
@@ -315,6 +407,56 @@ function buildMenu() {
             ],
         },
         {
+            label: '&Edit',
+            // These act on the files selected in the list, which only the
+            // window knows: it is asked to run them (menu:command). The keys
+            // the list handles itself are shown, not registered here, or they
+            // would be taken from the settings' own controls.
+            submenu: [
+                { label: 'Open', click: () => send('menu:command', 'open') },
+                { label: 'Show in Explorer', click: () => send('menu:command', 'reveal') },
+                { label: 'Copy Path', accelerator: 'CmdOrCtrl+Shift+C', click: () => send('menu:command', 'copy') },
+                { type: 'separator' },
+                { label: 'Optimize Selected Again', click: () => send('menu:command', 'again') },
+                { label: 'Stop Selected', click: () => send('menu:command', 'stop') },
+                {
+                    label: 'Restore Original',
+                    accelerator: 'CmdOrCtrl+Z',
+                    registerAccelerator: false,
+                    click: () => send('menu:command', 'revert'),
+                },
+                {
+                    label: 'Remove from List',
+                    accelerator: 'Delete',
+                    registerAccelerator: false,
+                    click: () => send('menu:command', 'remove'),
+                },
+                { type: 'separator' },
+                {
+                    label: 'Select All',
+                    accelerator: 'CmdOrCtrl+A',
+                    registerAccelerator: false,
+                    click: () => send('menu:command', 'select-all'),
+                },
+                {
+                    label: 'Filter…',
+                    accelerator: 'CmdOrCtrl+F',
+                    registerAccelerator: false,
+                    click: () => send('menu:command', 'find'),
+                },
+                { type: 'separator' },
+                {
+                    id: 'lossy',
+                    label: 'Lossy Minification',
+                    type: 'checkbox',
+                    checked: Boolean(settings.get('LossyEnabled')),
+                    accelerator: 'CmdOrCtrl+L',
+                    click: (item) => changeSettings({ LossyEnabled: item.checked }),
+                },
+                { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('menu:command', 'settings') },
+            ],
+        },
+        {
             label: '&View',
             submenu: [
                 // For working on the app only. Reload also took Ctrl+R from
@@ -368,6 +510,121 @@ async function openFolderDialog() {
     }
 }
 
+// Settings changed from the main process's side - the Edit menu - or from the
+// window's: either way the other one hears, and the menu's tick follows.
+function changeSettings(patch) {
+    const values = settings.update(patch);
+    if ('Theme' in patch) applyTheme();
+    send('settings:changed', values);
+    syncMenu();
+    return values;
+}
+
+function syncMenu() {
+    const menu = Menu.getApplicationMenu();
+    const lossy = menu && menu.getMenuItemById('lossy');
+    if (lossy) lossy.checked = Boolean(settings.get('LossyEnabled'));
+}
+
+// The files in the list an id names, of those the window sent: a list of
+// strings that are the queue's own keys. Anything else is ignored.
+function jobsFor(ids) {
+    if (!Array.isArray(ids)) return [];
+    const jobs = [];
+    for (const id of ids) {
+        if (typeof id !== 'string') continue;
+        const job = queue.jobs.get(id);
+        if (job) jobs.push(job);
+    }
+    return jobs;
+}
+
+// Puts back the originals of several files, and reports the ones that could
+// not be in one message rather than one each.
+function revertJobs(jobs) {
+    const failed = [];
+    let restored = 0;
+    for (const job of jobs) {
+        if (!job.canRevert) continue;
+        const result = queue.revert(job.id);
+        if (result.ok) restored += 1;
+        else failed.push(`${job.name}: ${result.reason}`);
+    }
+    if (failed.length) {
+        const shown = failed.slice(0, 8);
+        if (failed.length > shown.length) shown.push(`and ${failed.length - shown.length} more`);
+        messageBox({
+            type: 'warning',
+            message: restored
+                ? `Restored ${restored} file${restored === 1 ? '' : 's'}; ${failed.length} could not be`
+                : `${failed.length === 1 ? 'That file was' : 'Those files were'} not restored`,
+            detail: shown.join('\n'),
+            buttons: ['OK'],
+        });
+    }
+}
+
+// What can be done to files in the list, from the right-click menu, the Edit
+// menu and the keyboard alike.
+function runJobCommand(command, ids) {
+    const jobs = jobsFor(ids);
+    if (!jobs.length) return false;
+    const existing = jobs.filter((job) => fs.existsSync(job.filePath));
+    switch (command) {
+        case 'open':
+            // One file, or a handful: each opens in the app Windows has for it
+            for (const job of existing.slice(0, 10)) shell.openPath(job.filePath);
+            return true;
+        case 'reveal':
+            if (existing.length) shell.showItemInFolder(existing[0].filePath);
+            return true;
+        case 'copy':
+            clipboard.writeText(jobs.map((job) => job.filePath).join('\r\n'));
+            return true;
+        case 'again':
+            queue.againIds(jobs.map((job) => job.id));
+            return true;
+        case 'stop':
+            queue.stopIds(jobs.map((job) => job.id));
+            return true;
+        case 'revert':
+            revertJobs(jobs);
+            return true;
+        case 'remove': {
+            const removed = jobs.map((job) => job.id);
+            queue.remove(removed);
+            send('jobs:removed', removed);
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+function showJobMenu(ids) {
+    const jobs = jobsFor(ids);
+    if (!jobs.length || !mainWindow) return;
+    const many = jobs.length > 1;
+    const busy = (job) => job.isRunning || job.waiting;
+    const run = (command) => () => runJobCommand(command, jobs.map((job) => job.id));
+    Menu.buildFromTemplate([
+        { label: many ? 'Open' : 'Open', enabled: jobs.length <= 10, click: run('open') },
+        { label: 'Show in Explorer', click: run('reveal') },
+        { label: many ? 'Copy Paths' : 'Copy Path', accelerator: 'CmdOrCtrl+Shift+C', click: run('copy') },
+        { type: 'separator' },
+        { label: 'Optimize Again', enabled: jobs.some((job) => !busy(job) && !job.blocked), click: run('again') },
+        { label: 'Stop', enabled: jobs.some(busy), click: run('stop') },
+        {
+            label: 'Restore Original',
+            accelerator: 'CmdOrCtrl+Z',
+            enabled: jobs.some((job) => job.canRevert && !busy(job)),
+            click: run('revert'),
+        },
+        { type: 'separator' },
+        { label: 'Remove from List', accelerator: 'Delete', click: run('remove') },
+    ]).popup({ window: mainWindow });
+}
+
 function registerIpc() {
     ipcMain.handle('files:add', (event, paths) => queue.add(paths || []));
     ipcMain.handle('files:choose', () => openFileDialog());
@@ -380,39 +637,22 @@ function registerIpc() {
     ipcMain.handle('queue:clear', () => clearList());
     ipcMain.handle('queue:snapshot', () => ({ jobs: queue.snapshot(), stats: queue.stats() }));
 
-    ipcMain.handle('jobs:remove', (event, ids) => {
-        queue.remove(Array.isArray(ids) ? ids : []);
-        return true;
-    });
     // Ids are the queue's keys, not paths to act on: only a file in the list
-    // is ever shown or restored
-    ipcMain.handle('job:reveal', (event, id) => {
-        const job = queue.jobs.get(id);
-        if (job && fs.existsSync(job.filePath)) shell.showItemInFolder(job.filePath);
-    });
-    ipcMain.handle('job:revert', (event, id) => {
-        const job = queue.jobs.get(id);
-        const result = queue.revert(id);
-        if (!result.ok && mainWindow) {
-            dialog.showMessageBox(mainWindow, {
-                type: 'warning',
-                message: 'That file was not restored',
-                detail: `${job ? job.name : 'The file'} could not be put back because ${result.reason}.`,
-                buttons: ['OK'],
-            });
-        }
-        return result;
-    });
+    // is ever opened, shown, restored or removed
+    ipcMain.handle('jobs:command', (event, command, ids) => runJobCommand(String(command), ids));
+    ipcMain.handle('jobs:menu', (event, ids) => { showJobMenu(ids); });
 
     ipcMain.handle('settings:get', () => settings.all());
     ipcMain.handle('settings:set', (event, patch) => {
-        const values = settings.update(patch || {});
+        const values = settings.update(patch && typeof patch === 'object' ? patch : {});
         if (patch && 'Theme' in patch) applyTheme();
+        syncMenu();
         return values;
     });
     ipcMain.handle('settings:reset', () => {
         const values = settings.reset();
         applyTheme();
+        syncMenu();
         return values;
     });
 
@@ -552,6 +792,7 @@ app.whenReady().then(() => {
     queue.on('idle', (stats) => {
         flush(); // the last files' rows before the summary
         send('queue:idle', stats);
+        batchEnded(stats);
     });
     queue.on('scan', reportScan);
 
@@ -590,8 +831,27 @@ app.on('window-all-closed', () => {
 });
 
 // Files dragged onto the taskbar icon or passed on the command line
+// Explorer starts one process per selected file, and each hands its file to
+// this one: those arriving within a moment of each other are added together,
+// as one batch.
+let arriving = [];
+let arrivingTimer = null;
+
 app.on('second-instance', (event, argv, workingDirectory) => {
     const paths = filePathsFromArgv(argv, workingDirectory);
-    if (paths.length && queue) queue.add(paths);
-    if (mainWindow) mainWindow.focus();
+    if (paths.length && queue) {
+        arriving.push(...paths);
+        if (!arrivingTimer) {
+            arrivingTimer = setTimeout(() => {
+                const batch = arriving;
+                arriving = [];
+                arrivingTimer = null;
+                queue.add(batch);
+            }, 200);
+        }
+    }
+    if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+    }
 });

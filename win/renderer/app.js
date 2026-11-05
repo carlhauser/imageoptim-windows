@@ -19,23 +19,64 @@ const updateActionsEl = document.getElementById('update-actions');
 
 // ------------------------------------------------------------------ formatting
 
+// Numbers as Windows writes them here: thousands separated, one decimal
+const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+const oneDecimal = new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const whole = new Intl.NumberFormat(undefined);
+const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
+
 function formatBytes(bytes) {
     if (!bytes) return '0 KB';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes < 1024) return `${whole.format(bytes)} B`;
+    if (bytes < 1024 * 1024) return `${number.format(bytes < 10240 ? Math.round(bytes / 102.4) / 10 : Math.round(bytes / 1024))} KB`;
+    if (bytes < 1024 ** 3) return `${oneDecimal.format(bytes / 1024 ** 2)} MB`;
+    return `${oneDecimal.format(bytes / 1024 ** 3)} GB`;
+}
+
+const formatPercent = (value) => `${oneDecimal.format(value)}%`;
+
+// A tab's count: 12,400 in full up to ten thousand, then 12.4K, so the tabs
+// keep their width
+const formatCount = (n) => (n < 10000 ? whole.format(n) : compact.format(n));
+
+function formatElapsed(ms) {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+// "Zopfli · 1 of 3 · 0:12": which optimizers are at work on a running file,
+// how many have finished, and for how long it has been going
+function formatActivity(job) {
+    const a = job.activity;
+    if (!a || !a.total) return 'optimizing…';
+    const parts = [a.tools.length ? a.tools.join(', ') : 'starting', `${a.done} of ${a.total}`];
+    const elapsed = Date.now() - a.startedAt;
+    if (elapsed >= 3000) parts.push(formatElapsed(elapsed));
+    return parts.join(' · ');
 }
 
 function formatSavings(job) {
     if (job.state === 'error') return job.error || 'Error';
     if (job.state === 'queued') return 'waiting';
-    if (job.state === 'running') return 'optimizing…';
+    if (job.state === 'running') return formatActivity(job);
+    if (job.state === 'stopped') return 'stopped';
     if (job.state === 'reverted') return 'reverted';
     if (job.state === 'skipped' && !job.percentOptimized) return 'already optimized';
     // WebP and AVIF files nothing could be done to, and why
     if (job.state === 'done' && job.note) return job.note;
-    if (!job.percentOptimized) return '—';
-    return `${job.percentOptimized.toFixed(1)}%`;
+    if (!job.percentOptimized) return 'already optimal';
+    return formatPercent(job.percentOptimized);
+}
+
+// "pngquant −41 KB → OxiPNG −2 KB": each result kept since the original
+function formatSteps(job) {
+    if (!job.steps) return '';
+    return job.steps.map((step) => `${step.tool} −${formatBytes(step.saved)}${step.lossy ? ' (lossy)' : ''}`).join(' → ');
+}
+
+function formatProblems(job) {
+    if (!job.problems) return '';
+    return job.problems.map((p) => `${p.tool} ${p.problem}`).join('; ');
 }
 
 // ------------------------------------------------------------------ the model
@@ -112,14 +153,41 @@ function currentView() {
     return listPaneEl.dataset.view;
 }
 
+// Ctrl+F: a name to match, and whether to show only the files that failed
+const filter = { text: '', failedOnly: false };
+// A heading clicked: { key: name | size | savings | tool, dir: 1 | -1 }
+let sortBy = null;
+// Every file in each tab, before the filter: what follows the work and the
+// failure count go by
+let totals = { queue: 0, done: 0, skipped: 0, failed: 0 };
+
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const SORT_KEYS = {
+    name: (a, b) => collator.compare(a.name, b.name),
+    size: (a, b) => a.bestSize - b.bestSize,
+    savings: (a, b) => a.percentOptimized - b.percentOptimized,
+    tool: (a, b) => collator.compare(a.bestTool || '', b.bestTool || ''),
+};
+
+function matchesFilter(job) {
+    if (filter.failedOnly && job.state !== 'error') return false;
+    return !filter.text || job.name.toLowerCase().includes(filter.text);
+}
+
 function rebuildViews() {
     const next = { queue: [], done: [], skipped: [] };
     const running = [];
+    const counted = { queue: 0, done: 0, skipped: 0, failed: 0 };
     for (const id of arrival) {
         const job = jobs.get(id);
+        const view = viewOf(job.state);
+        counted[view] += 1;
+        if (job.state === 'error') counted.failed += 1;
+        if (!matchesFilter(job)) continue;
         if (job.state === 'running') running.push(id);
-        else next[viewOf(job.state)].push(id);
+        else next[view].push(id);
     }
+    totals = counted;
     // In the order the queue takes them (lib/queue.js sortPending)
     const size = (id) => jobs.get(id).originalSize;
     if (queueOrder === 'smallest') next.queue.sort((a, b) => size(a) - size(b));
@@ -127,9 +195,82 @@ function rebuildViews() {
     next.queue = running.concat(next.queue);
     const newest = (a, b) => (finishedAt.get(b) || 0) - (finishedAt.get(a) || 0);
     next.done.sort(newest);
+    if (sortBy) {
+        const compare = SORT_KEYS[sortBy.key];
+        for (const list of Object.values(next)) {
+            list.sort((a, b) => sortBy.dir * compare(jobs.get(a), jobs.get(b)));
+        }
+    }
     views = next;
     viewsStale = false;
 }
+
+// The headings: up, down, then back to the tab's own order
+for (const button of document.querySelectorAll('th button.sort')) {
+    button.addEventListener('click', () => {
+        const key = button.dataset.sort;
+        if (!sortBy || sortBy.key !== key) sortBy = { key, dir: 1 };
+        else if (sortBy.dir === 1) sortBy = { key, dir: -1 };
+        else sortBy = null;
+        for (const th of document.querySelectorAll('#file-table th')) {
+            const own = sortBy && th.querySelector('button.sort').dataset.sort === sortBy.key;
+            th.setAttribute('aria-sort', own ? (sortBy.dir === 1 ? 'ascending' : 'descending') : 'none');
+        }
+        structureChanged();
+    });
+}
+
+// ------------------------------------------------------------------ filter bar
+
+const filterBarEl = document.getElementById('filter-bar');
+const filterTextEl = document.getElementById('filter-text');
+const filterFailedEl = document.getElementById('filter-failed');
+
+function openFilter({ failedOnly = null } = {}) {
+    filterBarEl.hidden = false;
+    if (failedOnly !== null) {
+        filterFailedEl.checked = failedOnly;
+        filter.failedOnly = failedOnly;
+    }
+    filterTextEl.focus();
+    filterTextEl.select();
+    structureChanged();
+}
+
+function closeFilter() {
+    filterBarEl.hidden = true;
+    filterTextEl.value = '';
+    filterFailedEl.checked = false;
+    filter.text = '';
+    filter.failedOnly = false;
+    tableEl.focus();
+    structureChanged();
+}
+
+filterTextEl.addEventListener('input', () => {
+    filter.text = filterTextEl.value.trim().toLowerCase();
+    structureChanged();
+});
+filterFailedEl.addEventListener('change', () => {
+    filter.failedOnly = filterFailedEl.checked;
+    structureChanged();
+});
+document.getElementById('filter-close').addEventListener('click', closeFilter);
+filterBarEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        closeFilter();
+    } else if (event.key === 'ArrowDown' || event.key === 'Enter') {
+        event.preventDefault();
+        tableEl.focus();
+    }
+});
+window.addEventListener('keydown', (event) => {
+    if (event.key === 'f' && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
+        event.preventDefault();
+        openFilter();
+    }
+});
 
 function showView(view, focus = false) {
     if (currentView() !== view) {
@@ -166,18 +307,31 @@ function followTheWork(counts) {
     return null;
 }
 
-function updateCountsAndEmptyState() {
-    const counts = { queue: views.queue.length, done: views.done.length, skipped: views.skipped.length };
-    document.getElementById('count-queue').textContent = counts.queue;
-    document.getElementById('count-done').textContent = counts.done;
-    document.getElementById('count-skipped').textContent = counts.skipped;
+const statusFailedEl = document.getElementById('status-failed');
+const viewNoteEl = document.getElementById('view-note');
+const filtering = () => Boolean(filter.text || filter.failedOnly);
 
-    const follow = followTheWork(counts);
+function updateCountsAndEmptyState() {
+    // What each tab shows: filtered while a filter is on
+    const counts = { queue: views.queue.length, done: views.done.length, skipped: views.skipped.length };
+    document.getElementById('count-queue').textContent = formatCount(counts.queue);
+    document.getElementById('count-done').textContent = formatCount(counts.done);
+    document.getElementById('count-skipped').textContent = formatCount(counts.skipped);
+    document.getElementById('count-done').classList.toggle('has-errors', totals.failed > 0);
+    statusFailedEl.hidden = totals.failed === 0;
+    statusFailedEl.textContent = `${formatCount(totals.failed)} failed`;
+
+    // The work is followed by what is there, not by what the filter shows
+    const follow = followTheWork({ queue: totals.queue, done: totals.done, skipped: totals.skipped });
     if (follow && follow !== currentView()) showView(follow);
 
     const view = currentView();
+    viewNoteEl.hidden = !(view === 'skipped' && counts.skipped > 0);
     emptyEl.classList.toggle('hidden', counts[view] > 0);
-    if (jobs.size === 0) {
+    if (filtering() && totals[view] > 0) {
+        emptyTitleEl.textContent = 'No files match the filter';
+        emptyHintEl.textContent = 'Change it, or close it with Esc to see every file.';
+    } else if (jobs.size === 0) {
         emptyTitleEl.textContent = emptyText.title;
         emptyHintEl.innerHTML = keepOriginals ? keptHint : emptyText.hint;
     } else if (view === 'queue') {
@@ -257,8 +411,8 @@ function makeRow() {
     tr.innerHTML = `
         <td class="col-name col-name-cell" role="gridcell"><span class="state" role="img"></span><span class="name"></span></td>
         <td class="col-size size" role="gridcell"></td>
-        <td class="col-savings savings" role="gridcell"></td>
-        <td class="col-tool tool" role="gridcell"></td>`;
+        <td class="col-savings savings" role="gridcell"><span class="text"></span><button type="button" class="row-stop command" tabindex="-1" aria-label="Stop this file" title="Stop this file"><span class="icon i-stop" aria-hidden="true"></span></button></td>
+        <td class="col-tool tool" role="gridcell"><span class="text"></span><span class="badge" hidden>lossy</span></td>`;
     return tr;
 }
 
@@ -281,11 +435,21 @@ function fillRow(tr, job, index) {
     nameCell.lastElementChild.textContent = job.name;
     nameCell.title = job.path;
     sizeCell.textContent = formatBytes(job.bestSize);
-    savingsCell.textContent = formatSavings(job);
-    savingsCell.title = job.state === 'error' ? (job.error || 'Error') : (job.state === 'done' && job.noteDetail) || '';
-    savingsCell.classList.toggle('none', !job.percentOptimized && job.state !== 'error');
+    sizeCell.title = job.bestSize !== job.originalSize
+        ? `${formatBytes(job.originalSize)} → ${formatBytes(job.bestSize)}, ${formatBytes(job.originalSize - job.bestSize)} smaller`
+        : '';
+    savingsCell.firstElementChild.textContent = formatSavings(job);
+    const problems = formatProblems(job);
+    savingsCell.title = job.state === 'error' ? (job.error || 'Error')
+        : problems ? `Some optimizers had problems: ${problems}`
+            : (job.state === 'done' && job.noteDetail) || '';
+    savingsCell.classList.toggle('none', !job.percentOptimized && job.state !== 'error' && job.state !== 'running');
+    savingsCell.classList.toggle('activity', job.state === 'running');
     savingsCell.classList.toggle('error', job.state === 'error');
-    toolCell.textContent = job.bestTool || '';
+    savingsCell.classList.toggle('problems', Boolean(problems) && job.state !== 'running');
+    toolCell.firstElementChild.textContent = job.bestTool || '';
+    toolCell.lastElementChild.hidden = !job.lossy;
+    toolCell.title = formatSteps(job);
 
     const selected = selection.has(job.id);
     tr.classList.toggle('running', job.state === 'running');
@@ -370,6 +534,10 @@ rowsEl.addEventListener('mousedown', (event) => {
 rowsEl.addEventListener('click', (event) => {
     const tr = event.target.closest('tr[data-id]');
     if (!tr) return;
+    if (event.target.closest('.row-stop')) {
+        api.jobCommand('stop', [tr.dataset.id]);
+        return;
+    }
     const id = tr.dataset.id;
     const ids = views[currentView()];
 
@@ -392,7 +560,30 @@ rowsEl.addEventListener('click', (event) => {
 
 rowsEl.addEventListener('dblclick', (event) => {
     const tr = event.target.closest('tr[data-id]');
-    if (tr) api.reveal(tr.dataset.id);
+    if (tr) api.jobCommand('reveal', [tr.dataset.id]);
+});
+
+// The files a command acts on: the selection, or the row the keyboard is on
+function targetIds() {
+    if (selection.size) return [...selection];
+    return activeId ? [activeId] : [];
+}
+
+// Right-click: a row outside the selection becomes the selection first, as in
+// Explorer. main.js builds the menu, which runs the commands itself.
+rowsEl.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    const tr = event.target.closest('tr[data-id]');
+    if (!tr) return;
+    const id = tr.dataset.id;
+    if (!selection.has(id)) {
+        selection.clear();
+        selection.add(id);
+        anchorId = id;
+    }
+    activeId = id;
+    scheduleRender();
+    api.showJobMenu([...selection]);
 });
 
 // The grid's own keys, while it has focus
@@ -430,11 +621,17 @@ tableEl.addEventListener('keydown', (event) => {
         scheduleRender();
     } else if (event.key === 'a' && ctrl) {
         event.preventDefault();
-        for (const id of ids) selection.add(id);
-        scheduleRender();
+        selectAll();
     } else if (event.key === 'Enter' && activeId) {
         event.preventDefault();
-        api.reveal(activeId);
+        api.jobCommand('reveal', [activeId]);
+    } else if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
+        event.preventDefault();
+        if (!selection.size && activeId) selection.add(activeId);
+        if (selection.size) {
+            scheduleRender();
+            api.showJobMenu([...selection]);
+        }
     }
 });
 
@@ -447,14 +644,28 @@ window.addEventListener('keydown', (event) => {
 
     if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault();
-        const ids = [...selection];
-        api.removeJobs(ids).then(() => removeJobs(ids));
+        api.jobCommand('remove', [...selection]);
     }
 
     if (event.key === 'z' && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
-        for (const id of selection) api.revert(id);
+        api.jobCommand('revert', [...selection]);
     }
+});
+
+// The Edit menu's commands
+function selectAll() {
+    for (const id of views[currentView()]) selection.add(id);
+    scheduleRender();
+}
+
+api.onMenuCommand((command) => {
+    if (command === 'select-all') return selectAll();
+    if (command === 'settings') return document.getElementById('toggle-settings').click();
+    if (command === 'find') return openFilter();
+    const ids = targetIds();
+    if (ids.length) api.jobCommand(command, ids);
+    return undefined;
 });
 
 // ------------------------------------------------------------------ the totals
@@ -472,9 +683,20 @@ function renderBatch(batch) {
 // While a dropped folder is being looked through, before its files show
 let scanning = null;
 
+let scanNote = null; // what the last drop turned up, when it is worth saying
+
 function renderScan(scan) {
     scanning = scan.done ? null : scan;
-    if (scanning) statusFilesEl.textContent = `Looking for images… ${scanning.found.toLocaleString()} found`;
+    if (scan.done && scan.found === 0) {
+        scanNote = scan.ignored
+            ? `No PNG, JPEG, GIF, SVG, WebP or AVIF images there (${whole.format(scan.ignored)} other file${scan.ignored === 1 ? '' : 's'})`
+            : 'No PNG, JPEG, GIF, SVG, WebP or AVIF images there';
+        setTimeout(() => {
+            scanNote = null;
+            if (lastStats) renderStats(lastStats);
+        }, 6000);
+    }
+    if (scanning) statusFilesEl.textContent = `Looking for images… ${whole.format(scanning.found)} found`;
     else if (lastStats) renderStats(lastStats);
 }
 
@@ -487,28 +709,55 @@ function renderStats(stats) {
         stopButton.disabled = stats.busy === 0;
         return;
     }
+    document.getElementById('again').disabled = !stats.files;
+    document.getElementById('clear').disabled = !stats.files;
     if (!stats.files) {
-        statusFilesEl.textContent = 'No files';
+        statusFilesEl.textContent = scanNote || 'No files';
         statusSavingsEl.textContent = '';
         stopButton.disabled = true;
         return;
     }
 
+    const files = `${whole.format(stats.files)} file${stats.files === 1 ? '' : 's'}`;
     if (stats.batch) {
         statusFilesEl.textContent = stats.batch.text;
+    } else if (scanNote) {
+        statusFilesEl.textContent = scanNote;
+    } else if (!stats.busy && !stats.savedBytes && !stats.failed) {
+        statusFilesEl.textContent = stats.files === 1
+            ? 'The file was already optimal'
+            : `All ${files} were already optimal`;
     } else {
-        const parts = [`${stats.files} file${stats.files === 1 ? '' : 's'}`];
-        if (stats.busy) parts.push(`${stats.busy} in progress`);
-        if (stats.skipped) parts.push(`${stats.skipped} already optimized`);
+        const parts = [files];
+        if (stats.busy) parts.push(`${whole.format(stats.busy)} in progress`);
+        if (stats.skipped) parts.push(`${whole.format(stats.skipped)} already optimized`);
+        if (stats.maxPercent && stats.optimized > 1) parts.push(`up to ${formatPercent(stats.maxPercent)} per file`);
         statusFilesEl.textContent = parts.join(', ');
     }
 
     statusSavingsEl.textContent = stats.savedBytes
-        ? `saved ${formatBytes(stats.savedBytes)} (${stats.savedPercent.toFixed(1)}%)`
+        ? `Saved ${formatBytes(stats.savedBytes)} of ${formatBytes(stats.originalTotal)} (${formatPercent(stats.savedPercent)})`
         : '';
 
     stopButton.disabled = stats.busy === 0;
 }
+
+statusFailedEl.addEventListener('click', () => {
+    showView('done');
+    openFilter({ failedOnly: true });
+});
+
+// Settings → Options, from the status bar's "Lossy on"
+const statusLossyEl = document.getElementById('status-lossy');
+statusLossyEl.addEventListener('click', () => {
+    if (settingsEl.hidden) document.getElementById('toggle-settings').click();
+    selectTab(document.getElementById('tab-options'), true);
+});
+
+// Above Skipped
+document.getElementById('optimize-skipped').addEventListener('click', () => {
+    api.jobCommand('again', views.skipped.slice());
+});
 
 // -------------------------------------------------------------------- actions
 
@@ -564,8 +813,12 @@ for (const tab of tabs) {
 
 let dragDepth = 0;
 
+// Only for files: dragging text or a link over the window used to raise it too
+const carriesFiles = (event) => Boolean(event.dataTransfer && [...event.dataTransfer.types].includes('Files'));
+
 window.addEventListener('dragenter', (event) => {
     event.preventDefault();
+    if (!carriesFiles(event)) return;
     dragDepth += 1;
     overlayEl.hidden = false;
 });
@@ -616,6 +869,7 @@ function updateFill(input) {
 
 function applySettings(values) {
     applyAccent(values);
+    if ('LossyEnabled' in values) statusLossyEl.hidden = !values.LossyEnabled;
     if ('KeepOriginals' in values) {
         keepOriginals = Boolean(values.KeepOriginals);
         structureChanged();
@@ -734,6 +988,8 @@ api.onIdle((stats) => {
     if (!settingsEl.hidden) api.historyStats().then(renderHistory);
 });
 api.onReset(resetJobs);
+api.onRemoved(removeJobs);
+api.onSettingsChanged(applySettings);
 api.onUpdateState(renderUpdate);
 
 (async function init() {

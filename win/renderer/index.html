@@ -56,16 +56,33 @@
 
     <main>
         <div class="list-pane" data-view="queue">
+            <!-- Ctrl+F: narrows every tab to the files whose name matches, or
+                 to the ones that failed -->
+            <div id="filter-bar" class="filter-bar" hidden>
+                <span class="icon i-filter" aria-hidden="true"></span>
+                <input type="search" id="filter-text" placeholder="Filter by name" aria-label="Filter by name" spellcheck="false">
+                <label class="filter-check"><input type="checkbox" id="filter-failed">Failed only</label>
+                <button type="button" id="filter-close" class="command" aria-label="Close the filter" title="Close (Esc)">
+                    <span class="icon i-dismiss" aria-hidden="true"></span>
+                </button>
+            </div>
+            <!-- Above the Skipped tab: what it holds, and a way to do them anyway -->
+            <div id="view-note" class="view-note" hidden>
+                <span>Already optimized by an earlier run, so left as they are.</span>
+                <button type="button" id="optimize-skipped">Optimize these anyway</button>
+            </div>
             <div class="list-body">
                 <!-- A grid: one tab stop, the arrow keys move between rows, and
                      only the rows in sight exist (app.js). -->
                 <table id="file-table" role="grid" aria-label="Files" aria-multiselectable="true" tabindex="0">
                     <thead>
+                        <!-- Each heading sorts by its column: up, down, then back to
+                             the tab's own order -->
                         <tr role="row" aria-rowindex="1">
-                            <th class="col-name" role="columnheader">Name</th>
-                            <th class="col-size" role="columnheader">Size</th>
-                            <th class="col-savings" role="columnheader">Savings</th>
-                            <th class="col-tool" role="columnheader">Best tool</th>
+                            <th class="col-name" role="columnheader" aria-sort="none"><button type="button" class="sort" data-sort="name">Name</button></th>
+                            <th class="col-size" role="columnheader" aria-sort="none"><button type="button" class="sort" data-sort="size">Size</button></th>
+                            <th class="col-savings" role="columnheader" aria-sort="none"><button type="button" class="sort" data-sort="savings">Savings</button></th>
+                            <th class="col-tool" role="columnheader" aria-sort="none"><button type="button" class="sort" data-sort="tool">Best tool</button></th>
                         </tr>
                     </thead>
                     <tbody id="file-rows"></tbody>
@@ -253,7 +270,9 @@
             <div class="batch-progress-fill"></div>
         </div>
         <span id="status-files">No files</span>
+        <button type="button" id="status-failed" class="status-link" hidden></button>
         <span class="toolbar-spacer"></span>
+        <button type="button" id="status-lossy" class="chip" hidden title="Lossy minification is on: images may look slightly different. Click to change.">Lossy on</button>
         <span id="status-savings"></span>
     </footer>
 

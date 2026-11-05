@@ -410,3 +410,23 @@ test('past the backup budget a file keeps no backup, and never one of a later re
         BACKUPS.budget = budget;
     }
 });
+
+test('a read-only file is refused before any work, and says why', async () => {
+    const { execFileSync } = require('child_process');
+    const file = path.join(scratch(), 'readonly.png');
+    fs.copyFileSync(path.resolve(__dirname, '..', '..', 'libpng', 'pngbar.png'), file);
+    if (process.platform === 'win32') execFileSync('attrib', ['+R', file]);
+    else fs.chmodSync(file, 0o444);
+    try {
+        const job = new Job(file, { resolveTool: () => ({ exe: '/fake/tool' }) });
+        let ran = false;
+        job.runTool = async () => { ran = true; return null; };
+        await job.run({ ...DEFAULTS }, new AbortController().signal);
+        assert.strictEqual(job.state, 'error');
+        assert.match(job.error, /Read-only/);
+        assert.strictEqual(ran, false);
+    } finally {
+        if (process.platform === 'win32') execFileSync('attrib', ['-R', file]);
+        else fs.chmodSync(file, 0o644);
+    }
+});

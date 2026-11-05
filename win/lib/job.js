@@ -10,6 +10,7 @@ const { hashFile, statKey, profileFor, satisfies } = require('./history');
 const { keepOriginal, removeIfEmpty, sameContent } = require('./originals');
 const { looksComplete, hasRoomFor } = require('./validate');
 const { Semaphore } = require('./semaphore');
+const { describeFsError } = require('./errors');
 const {
     detectType, inspect, typeFromExtension, isSmall, HEADER_BYTES, PNG, JPEG, GIF, SVG, WEBP, AVIF,
 } = require('./filetype');
@@ -226,6 +227,11 @@ class Job extends EventEmitter {
         this.toolsDone = 0;
         this.shownProgress = 0;
         this.problems = [];        // { tool, problem } from the last run
+        // Each result kept since the original: { tool, size, lossy }, so the
+        // window can say "pngquant 80% → OxiPNG" rather than the last name only
+        this.steps = [];
+        this.activeTools = new Map(); // tool label -> how many are running
+        this.startedAt = 0;
     }
 
     // How far along the row's progress line is. Counting finished optimizers
@@ -328,6 +334,16 @@ class Job extends EventEmitter {
             // Optimized past the session's backup budget, so no way back
             revertLost: Boolean(this.originalLost),
             problems: this.problems.length ? this.problems.slice() : null,
+            steps: this.steps.length ? this.steps.slice() : null,
+            lossy: this.steps.some((step) => step.lossy),
+            // While it runs: which optimizers are at work, how many are done
+            // of how many, and since when
+            activity: this.state === 'running' ? {
+                tools: [...this.activeTools.keys()],
+                done: this.toolsDone,
+                total: this.toolsTotal,
+                startedAt: this.startedAt,
+            } : null,
         };
     }
 
@@ -339,13 +355,14 @@ class Job extends EventEmitter {
 
     // Keeps the candidate only when it is genuinely smaller, exactly as
     // setFileOptimized:toolName: does.
-    adopt(candidatePath, size, label) {
+    adopt(candidatePath, size, label, lossy = false) {
         if (!size || size >= this.bestSize) {
             unlinkQuietly(candidatePath);
             return false;
         }
 
         const previous = this.bestPath;
+        this.steps.push({ tool: label, saved: this.bestSize - size, lossy: Boolean(lossy) });
         this.bestPath = candidatePath;
         this.bestSize = size;
         this.bestTool = label;
@@ -511,7 +528,13 @@ class Job extends EventEmitter {
             timeout = AbortSignal.timeout(tools.timeoutMs(tool, ctx));
             ctx.signal = AbortSignal.any([signal, timeout]);
             ctx.threads = this.semaphore ? this.semaphore.threadsPerSlot(CORES) : CORES;
-            return tool.run(ctx);
+            this.activeTools.set(tool.label, (this.activeTools.get(tool.label) || 0) + 1);
+            this.emit('change', this);
+            return Promise.resolve(tool.run(ctx)).finally(() => {
+                const left = this.activeTools.get(tool.label) - 1;
+                if (left > 0) this.activeTools.set(tool.label, left);
+                else this.activeTools.delete(tool.label);
+            });
         };
 
         // A tool that may only run once at a time waits for its turn before it
@@ -582,6 +605,9 @@ class Job extends EventEmitter {
     async doRun(settings, signal) {
         this.shownProgress = 0;
         this.problems = [];
+        this.startedAt = Date.now();
+        this.toolsTotal = 0;
+        this.toolsDone = 0;
         this.setState('running');
 
         let header;
@@ -605,12 +631,12 @@ class Job extends EventEmitter {
             this.startSize = stat.size;
             this.startMtimeMs = stat.mtimeMs;
         } catch (err) {
-            this.setState('error', 'Can’t open the file');
+            this.setState('error', `Can’t open the file. ${describeFsError(err)}`);
             return;
         }
 
         if (!currentSize) {
-            this.setState('error', 'Can’t open the file');
+            this.setState('error', 'The file is empty');
             return;
         }
 
@@ -625,6 +651,7 @@ class Job extends EventEmitter {
                 || (this.lastSavedMtimeMs && this.lastSavedMtimeMs !== stat.mtimeMs));
         if (!this.runCount || changedExternally) {
             this.originalSize = currentSize;
+            this.steps = [];
             if (changedExternally) {
                 // What is on disk now is the file's new original
                 this.dropBackup();
@@ -645,10 +672,18 @@ class Job extends EventEmitter {
             return;
         }
 
+        // Can it be written at all? Asked before any work is done. On Windows
+        // fs.access only sees the read-only flag, not permissions or another
+        // program holding the file, so the file is opened for writing - and
+        // closed again at once, untouched.
         try {
-            fs.accessSync(this.filePath, fs.constants.W_OK);
+            fs.closeSync(fs.openSync(this.filePath, 'r+'));
         } catch (err) {
-            this.setState('error', 'Optimized file could not be saved');
+            // Windows reports the Read-only attribute as no write permission
+            const readOnly = !(this.mode & 0o222);
+            this.setState('error', readOnly
+                ? 'Read-only. Clear Read-only in the file’s Properties to optimize it.'
+                : `Can’t be changed. ${describeFsError(err)}`);
             return;
         }
 
@@ -700,7 +735,7 @@ class Job extends EventEmitter {
             return;
         }
         if (!this.toolsTotal) {
-            this.setState('error', 'All necessary tools have been disabled in Preferences');
+            this.setState('error', 'Every optimizer for this format is turned off in Settings');
             return;
         }
 
@@ -718,7 +753,7 @@ class Job extends EventEmitter {
         for (const step of runFirst) {
             if (signal.aborted) break;
             const result = await this.runTool(step, settings, signal);
-            if (result) this.adopt(result.temp, result.size, result.label);
+            if (result) this.adopt(result.temp, result.size, result.label, result.lossy);
         }
 
         // Lossless passes all start from the same input and compete for smallest
@@ -729,7 +764,7 @@ class Job extends EventEmitter {
             results
                 .filter(Boolean)
                 .sort((a, b) => a.size - b.size)
-                .forEach((result) => this.adopt(result.temp, result.size, result.label));
+                .forEach((result) => this.adopt(result.temp, result.size, result.label, result.lossy));
         }
 
         if (signal.aborted) {
@@ -752,7 +787,7 @@ class Job extends EventEmitter {
         try {
             this.save(settings);
         } catch (err) {
-            this.setState('error', `Optimized file could not be saved: ${err.message}`);
+            this.setState('error', `Not saved. ${err.plain || describeFsError(err)}`);
             return;
         }
         await this.remember(settings, level, { written: true });
@@ -837,33 +872,35 @@ class Job extends EventEmitter {
     // outlives the session: the session's temp copy is deleted on Clear and on
     // quit. Returns the error to report, saying where the original is.
     recoverOriginal(err) {
+        const plain = (text) => Object.assign(new Error(text), { plain: text });
+        const why = describeFsError(err);
         if (sameContent(this.filePath, this.backupPath)) {
-            return new Error(err.message); // never touched
+            return plain(why); // never touched
         }
         try {
             fs.copyFileSync(this.backupPath, this.filePath);
             if (sameContent(this.filePath, this.backupPath)) {
-                return new Error(`${err.message} (the original was put back)`);
+                return plain(`${why} The original was put back.`);
             }
         } catch (e) {
             /* rescued below */
         }
 
         if (this.backupIsKept) {
-            return new Error(`${err.message}. The original is in the “ImageOptim originals” folder beside it.`);
+            return plain(`${why} The original is in the “ImageOptim originals” folder beside it.`);
         }
         for (const dir of [path.dirname(this.filePath), os.homedir()]) {
             try {
                 const target = rescueName(dir, this.filePath);
                 if (!target) continue;
                 fs.copyFileSync(this.backupPath, target, fs.constants.COPYFILE_EXCL);
-                return new Error(`${err.message}. The original was saved as ${target}`);
+                return plain(`${why} The original was saved as ${target}`);
             } catch (e) {
                 /* try the next place */
             }
         }
         this.backupPinned = true; // dropBackup() leaves it alone
-        return new Error(`${err.message}. The original is at ${this.backupPath} until ImageOptim quits.`);
+        return plain(`${why} The original is at ${this.backupPath} until ImageOptim quits.`);
     }
 
     // Refuses to write if the file changed while the optimizers were running.
@@ -1010,6 +1047,7 @@ class Job extends EventEmitter {
         this.lastSavedMtimeMs = 0;
         this.runCount = 0;
         this.bestTool = null;
+        this.steps = [];
         this.setState('reverted');
         return { ok: true };
     }

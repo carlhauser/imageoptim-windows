@@ -89,7 +89,11 @@ const pngquant = {
         // pngquant declining the image, not an error.
         if (code === 98 || code === 99) return null;
         if (code !== 0) return null;
-        return { size: statSize(ctx.temp), label: 'pngquant' };
+        // --skip-if-larger only refuses a file that grew: a palette for a
+        // few bytes is still a generation of loss for nothing
+        const size = statSize(ctx.temp);
+        if (!lossyWorthIt(ctx, size)) return null;
+        return { size, label: 'pngquant', lossy: true };
     },
 };
 
@@ -243,7 +247,7 @@ const jpegoptim = {
             return null; // demand at least 5% for a lossy pass
         }
 
-        return { size: reported, label: lossy ? `JpegOptim ${maxquality}%` : 'JpegOptim' };
+        return { size: reported, label: lossy ? `JpegOptim ${maxquality}%` : 'JpegOptim', lossy };
     },
 };
 
@@ -309,7 +313,7 @@ const guetzli = {
 
         const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
         if (code !== 0) return null;
-        return { size: statSize(ctx.temp), label: 'Guetzli' };
+        return { size: statSize(ctx.temp), label: 'Guetzli', lossy: true };
     },
 };
 
@@ -356,7 +360,7 @@ function makeGifsicle(interlace) {
                 if (!(threshold < ctx.input.byteSize)) return null;
             }
 
-            return { size, label: isLossy ? 'Giflossy' : label };
+            return { size, label: isLossy ? 'Giflossy' : label, lossy: isLossy };
         },
     };
 }
@@ -399,7 +403,8 @@ const svgo = {
             signal: ctx.signal,
         });
         if (code !== 0) return null;
-        return { size: statSize(ctx.temp), label: ctx.settings.LossyEnabled ? 'SVGO' : 'SVGO lite' };
+        // The lossy plugin set rounds coordinates and drops titles
+        return { size: statSize(ctx.temp), label: ctx.settings.LossyEnabled ? 'SVGO' : 'SVGO lite', lossy: Boolean(ctx.settings.LossyEnabled) };
     },
 };
 
@@ -475,7 +480,7 @@ const cwebpLossy = {
         if (code !== 0) return null;
         const size = statSize(ctx.temp);
         if (!lossyWorthIt(ctx, size)) return null;
-        return { size, label: `cwebp ${quality}%` };
+        return { size, label: `cwebp ${quality}%`, lossy: true };
     },
 };
 
@@ -596,7 +601,7 @@ const avifenc = {
             if (code !== 0) return null;
             const size = statSize(ctx.temp);
             if (!lossyWorthIt(ctx, size)) return null;
-            return { size, label: `avifenc ${quality}%` };
+            return { size, label: `avifenc ${quality}%`, lossy: true };
         } finally {
             unlinkQuietly(decoded);
         }
