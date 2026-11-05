@@ -22,10 +22,11 @@ on:
     paths:
       - 'win/**'
       - '.github/workflows/tests.yml'
+  # Every pull request, whatever it touches: these are the checks the main
+  # branch's ruleset requires before a merge, and a required check that never
+  # runs - a Dependabot update to svgo/ or to windows.yml, say - would leave
+  # the pull request waiting for ever. The suite takes seconds.
   pull_request:
-    paths:
-      - 'win/**'
-      - '.github/workflows/tests.yml'
 
 jobs:
   test:
