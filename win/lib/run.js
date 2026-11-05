@@ -1,7 +1,10 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const { spawn } = require('child_process');
+
+const PRIORITY = os.constants.priority.PRIORITY_BELOW_NORMAL;
 
 // Launches an optimizer and waits for it. Mirrors CommandWorker.m: the child's
 // output is captured so tools that only report the result size on stdout can be
@@ -66,6 +69,17 @@ function runTool(options) {
             return;
         }
 
+        // Below normal, as the macOS app's RunLowPriority did: a batch keeps
+        // every core busy, and the PC should stay usable while it does.
+        // Threads the tool starts later inherit the priority class.
+        if (child.pid) {
+            try {
+                os.setPriority(child.pid, PRIORITY);
+            } catch (err) {
+                /* already gone, or not allowed: it runs at normal priority */
+            }
+        }
+
         let output = '';
         const collect = (chunk) => {
             // Optimizer chatter is small; cap it so a runaway tool cannot
@@ -121,4 +135,4 @@ function firstTwoNumbers(output) {
     return null;
 }
 
-module.exports = { runTool, numberAfter, firstTwoNumbers };
+module.exports = { runTool, numberAfter, firstTwoNumbers, PRIORITY };

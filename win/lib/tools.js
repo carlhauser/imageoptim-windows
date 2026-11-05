@@ -16,6 +16,14 @@ const { PNG, JPEG, GIF, SVG, WEBP, AVIF, isSmall, isLarge } = require('./filetyp
 // null when it produced nothing useful. Deciding whether to keep the candidate
 // belongs to the job, which keeps whichever output is smallest.
 
+// How a multi-threaded tool is told how many threads it may use (ctx.threads,
+// from lib/semaphore.js threadsPerSlot). oxipng and pngquant run on rayon,
+// which reads RAYON_NUM_THREADS; oxipng also takes -t. Absent, as in the
+// argument tests, a tool keeps its own default.
+function rayonEnv(ctx) {
+    return ctx.threads ? { RAYON_NUM_THREADS: String(ctx.threads) } : null;
+}
+
 function statSize(filePath) {
     try {
         return fs.statSync(filePath).size;
@@ -37,8 +45,9 @@ const oxipng = {
         if (ctx.settings.PngOutRemoveChunks) {
             args.unshift('--strip=safe');
         }
+        if (ctx.threads) args.splice(args.indexOf('--out'), 0, '-t', String(ctx.threads));
 
-        const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });
+        const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal, env: rayonEnv(ctx) });
         if (code !== 0) return null;
         return { size: statSize(ctx.temp), label: 'OxiPNG' };
     },
@@ -72,6 +81,7 @@ const pngquant = {
             stdinPath: ctx.input.path,
             stdoutPath: ctx.temp,
             signal: ctx.signal,
+            env: rayonEnv(ctx),
         });
 
         // 98 = output was not smaller, 99 = quality floor not reachable. Both are
@@ -415,6 +425,12 @@ function webpLosslessEffort(level, byteSize) {
     return byteSize > 2 * 1024 * 1024 ? 7 : 9;
 }
 
+// cwebp's -mt is on or off, so it is left off only when this run has a
+// single core to itself
+function multiThread(ctx) {
+    return ctx.threads === 1 ? [] : ['-mt'];
+}
+
 const cwebp = {
     id: 'cwebp',
     exe: 'cwebp',
@@ -428,7 +444,7 @@ const cwebp = {
         // -metadata icc copies the ICC profile across and drops EXIF and XMP.
         const args = [
             '-lossless', '-z', String(webpLosslessEffort(ctx.level, ctx.input.byteSize)),
-            '-exact', '-mt',
+            '-exact', ...multiThread(ctx),
             '-metadata', ctx.settings.WebPAvifStripMetadata ? 'icc' : 'all',
             '-quiet', '-o', ctx.temp, '--', ctx.input.path,
         ];
@@ -448,7 +464,7 @@ const cwebpLossy = {
     async run(ctx) {
         const quality = Number(ctx.settings.WebPQuality);
         const args = [
-            '-q', String(quality), '-m', '6', '-mt',
+            '-q', String(quality), '-m', '6', ...multiThread(ctx),
             '-metadata', ctx.settings.WebPAvifStripMetadata ? 'icc' : 'all',
             '-quiet', '-o', ctx.temp, '--', ctx.input.path,
         ];
@@ -515,6 +531,13 @@ function avifSpeed(level) {
     return Math.max(4, Math.min(8, 10 - level));
 }
 
+// avifenc and avifdec use every core unless told otherwise. --autotiling would
+// let more threads work on one image, but it splits the image into tiles,
+// which costs a little size, so it is left alone.
+function avifJobs(ctx) {
+    return ctx.threads ? ['-j', String(ctx.threads)] : [];
+}
+
 // AVIF has no lossless optimizer, so this is a lossy re-encode and only runs
 // with lossy minification on. avifenc cannot read AVIF, so avifdec decodes it
 // first. The intermediate is PNG rather than y4m because PNG carries the ICC
@@ -545,7 +568,7 @@ const avifenc = {
         try {
             const dec = await run.runTool({
                 exe: avifdec,
-                args: ['--sato', '--png-compress', '0', '-d', '16', '--', ctx.input.path, decoded],
+                args: ['--sato', '--png-compress', '0', '-d', '16', ...avifJobs(ctx), '--', ctx.input.path, decoded],
                 signal: ctx.signal,
             });
             if (dec.code !== 0) return null;
@@ -563,6 +586,7 @@ const avifenc = {
             ];
             if (image.clli) args.push('--clli', image.clli);
             if (ctx.settings.WebPAvifStripMetadata) args.push('--ignore-exif', '--ignore-xmp');
+            args.push(...avifJobs(ctx));
             args.push('--', decoded, ctx.temp);
 
             const { code } = await run.runTool({ exe: ctx.exe, args, signal: ctx.signal });

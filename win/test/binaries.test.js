@@ -105,6 +105,8 @@ async function runForReal(tool, dir, { checkGain = true } = {}) {
             lossyGif: tool.id === 'gifsicle',
             features: inspect(type, input, header),
             signal: new AbortController().signal,
+            // So the thread flags (-t, -j, -mt) are run for real too
+            threads: 2,
             exe: resolved.exe,
             script: resolved.script,
             helpers: resolved.helpers,

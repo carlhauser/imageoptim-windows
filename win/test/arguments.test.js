@@ -357,3 +357,47 @@ test('avifenc — speed 6 at the default effort, 4 at the highest', () => {
     assert.strictEqual(avifSpeed(7), 4);
     assert.strictEqual(avifSpeed(1), 8);
 });
+
+// ------------------------------------------------------------- thread budget
+//
+// The multi-threaded tools are told how many cores they may use
+// (lib/semaphore.js threadsPerSlot); left alone, each takes them all.
+
+test('oxipng — -t and RAYON_NUM_THREADS when given a thread budget', async () => {
+    const { args, options, tempPath, inputPath } = await captureArgs('oxipng', { extra: { threads: 3 } });
+    assert.deepStrictEqual(args,
+        ['--strip=safe', '-o4', '-i0', '-a', '-t', '3', '--out', tempPath, '--', inputPath]);
+    assert.deepStrictEqual(options.env, { RAYON_NUM_THREADS: '3' });
+});
+
+test('pngquant — RAYON_NUM_THREADS when given a thread budget', async () => {
+    const { options } = await captureArgs('pngquant', {
+        settings: { LossyEnabled: true }, extra: { threads: 2 },
+    });
+    assert.deepStrictEqual(options.env, { RAYON_NUM_THREADS: '2' });
+});
+
+test('cwebp — no -mt with a single core, -mt with more', async () => {
+    const one = await captureArgs('cwebp', { type: 'webp', extra: { threads: 1 } });
+    assert.ok(!one.args.includes('-mt'));
+    const four = await captureArgs('cwebp', { type: 'webp', extra: { threads: 4 } });
+    assert.ok(four.args.includes('-mt'));
+    const lossy = await captureArgs('cwebp-lossy', {
+        type: 'webp', settings: { LossyEnabled: true }, extra: { threads: 1 }, outSize: 10,
+    });
+    assert.ok(!lossy.args.includes('-mt'));
+});
+
+test('avifenc and avifdec — -j with a thread budget', async () => {
+    const { calls } = await captureArgs('avifenc', {
+        type: 'avif',
+        settings: { LossyEnabled: true, AvifQuality: 60 },
+        output: AVIFDEC_SUMMARY,
+        extra: { helpers: { avifdec: '/fake/bin/avifdec' }, threads: 5 },
+    });
+    for (const call of calls) {
+        const at = call.args.indexOf('-j');
+        assert.ok(at >= 0 && call.args[at + 1] === '5', call.args.join(' '));
+        assert.ok(at < call.args.indexOf('--'), 'before the file names');
+    }
+});

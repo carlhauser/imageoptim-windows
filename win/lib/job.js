@@ -16,6 +16,9 @@ const {
 let tempCounter = 0;
 let tempRoot = null;
 
+// The cores the optimizers share (lib/semaphore.js threadsPerSlot)
+const CORES = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+
 // Everything scratch lives in one directory we own, so a crash leaves a single
 // identifiable folder and startup can reclaim it. Writing loose files straight
 // into %TEMP% meant orphans nothing ever cleaned up.
@@ -453,13 +456,15 @@ class Job extends EventEmitter {
             if (signal.aborted) return null;
             timeout = AbortSignal.timeout(tools.timeoutMs(tool, ctx));
             ctx.signal = AbortSignal.any([signal, timeout]);
+            ctx.threads = this.semaphore ? this.semaphore.threadsPerSlot(CORES) : CORES;
             return tool.run(ctx);
         };
 
         let result = null;
         try {
-            // One slot per running optimizer, shared with every other file
-            result = this.semaphore ? await this.semaphore.run(execute) : await execute();
+            // One slot per running optimizer, shared with every other file. A
+            // file stopped while waiting gives up its place in line.
+            result = this.semaphore ? await this.semaphore.run(execute, signal) : await execute();
         } catch (err) {
             console.warn(`${tool.id} failed:`, err.message);
             this.noteProblem(tool, 'failed');
