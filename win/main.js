@@ -181,9 +181,13 @@ function buildMenu() {
         {
             label: '&View',
             submenu: [
-                { role: 'reload' },
-                { role: 'toggleDevTools' },
-                { type: 'separator' },
+                // For working on the app only. Reload also took Ctrl+R from
+                // Optimize Again, and reloading mid-run blanked the list.
+                ...(app.isPackaged ? [] : [
+                    { role: 'reload' },
+                    { role: 'toggleDevTools' },
+                    { type: 'separator' },
+                ]),
                 { role: 'resetZoom' },
                 { role: 'zoomIn' },
                 { role: 'zoomOut' },
