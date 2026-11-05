@@ -170,10 +170,25 @@ test('a file this app already optimized is not kept as an "original"', async () 
     const history = new History(path.join(scratch(), `h-${unique()}.jsonl`));
     const { job, file } = readyJob(dir, 'j.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2), { history });
     job.inputHash = await hashFile(file);
-    history.record({ hash: job.inputHash, type: 'png', profile: profileFor('png', DEFAULTS) });
+    history.record({ hash: job.inputHash, type: 'png', profile: profileFor('png', DEFAULTS), written: true });
     job.save(KEEP);
     assert.ok(!fs.existsSync(originalsIn(dir)));
     assert.strictEqual(job.backupIsKept, false);
+});
+
+test('a file only remembered as already optimal is still kept before a later save', async () => {
+    // Nothing could improve it the first time, so it was remembered as it
+    // was. Re-run with lossy on, it gets smaller - and it is still the user's
+    // untouched original, so it must be kept before it is overwritten.
+    const dir = folder();
+    const history = new History(path.join(scratch(), `h-${unique()}.jsonl`));
+    const { job, file } = readyJob(dir, 'u.png', Buffer.alloc(1000, 1), Buffer.alloc(400, 2), { history });
+    job.inputHash = await hashFile(file);
+    history.record({ hash: job.inputHash, type: 'png', profile: profileFor('png', DEFAULTS) });
+    job.save(KEEP);
+    assert.strictEqual(job.backupIsKept, true);
+    const kept = path.join(originalsIn(dir), 'u.png');
+    assert.ok(fs.readFileSync(kept).every((b) => b === 1), 'the untouched bytes are in the originals folder');
 });
 
 test('a folder dropped in is never searched for its originals folder', async () => {

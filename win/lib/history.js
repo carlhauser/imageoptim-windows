@@ -66,7 +66,9 @@ class History {
         this.filePath = filePath;
         this.cap = cap;
         this.now = now;
-        this.byHash = new Map(); // content hash -> { t: type, p: profile, at }
+        // content hash -> { t: type, p: profile, at, w }. w: this app wrote
+        // that content, as opposed to finding it already as good as it gets.
+        this.byHash = new Map();
         this.byStat = new Map(); // stat key -> content hash
         this.lines = 0;
         this.needsNewline = false;
@@ -102,7 +104,13 @@ class History {
 
     apply(record) {
         if (!record || typeof record.h !== 'string') return;
-        if (record.p) this.byHash.set(record.h, { t: record.t, p: record.p, at: Number(record.at) || 0 });
+        if (record.p) {
+            // Once written by us, always: a later run that found nothing more
+            // to do with the same content does not make it someone else's.
+            const before = this.byHash.get(record.h);
+            const w = record.w || (before && before.w) ? 1 : 0;
+            this.byHash.set(record.h, { t: record.t, p: record.p, at: Number(record.at) || 0, w });
+        }
         if (typeof record.s === 'string') this.byStat.set(record.s, record.h);
     }
 
@@ -118,10 +126,20 @@ class History {
         return this.byHash.size;
     }
 
+    // The content this app saved over an original. Keep originals needs to
+    // tell it apart from an untouched file that was merely remembered: only
+    // the untouched one is somebody's original.
+    isOwnOutput(hash) {
+        const entry = this.findByHash(hash);
+        return Boolean(entry && entry.w);
+    }
+
     // hash: the file's content as it now is on disk; key: its statKey, if
-    // known; type and profile: how it was optimized.
-    record({ hash, key, type, profile }) {
+    // known; type and profile: how it was optimized; written: true when this
+    // app wrote that content, false when the file was left as it was.
+    record({ hash, key, type, profile, written = false }) {
         const record = { h: hash, t: type, p: profile, at: this.now() };
+        if (written) record.w = 1;
         if (key) record.s = key;
         this.apply(record);
         try {
@@ -151,7 +169,11 @@ class History {
         const out = [];
         for (const [hash, entry] of keep.reverse()) {
             const statKeys = keys.get(hash) || [];
-            out.push(JSON.stringify({ h: hash, t: entry.t, p: entry.p, at: entry.at, ...(statKeys[0] ? { s: statKeys[0] } : {}) }));
+            out.push(JSON.stringify({
+                h: hash, t: entry.t, p: entry.p, at: entry.at,
+                ...(entry.w ? { w: 1 } : {}),
+                ...(statKeys[0] ? { s: statKeys[0] } : {}),
+            }));
             for (const key of statKeys.slice(1)) out.push(JSON.stringify({ h: hash, s: key }));
         }
 

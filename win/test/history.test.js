@@ -91,6 +91,38 @@ test('compaction keeps the newest files and leaves no temp file', () => {
     assert.ok(!fs.existsSync(`${file}.tmp`));
 });
 
+test('written — marks content this app saved, sticks, and survives compaction', () => {
+    const file = storePath();
+    let t = 0;
+    const h = new History(file, { cap: 2, now: () => ++t });
+    const ours = 'o'.repeat(32);
+    const found = 'f'.repeat(32);
+    h.record({ hash: ours, type: 'png', profile: profile(), written: true });
+    h.record({ hash: found, type: 'png', profile: profile() });
+    assert.strictEqual(h.isOwnOutput(ours), true);
+    assert.strictEqual(h.isOwnOutput(found), false, 'left as it was is not ours');
+    assert.strictEqual(h.isOwnOutput('x'.repeat(32)), false);
+
+    // Run again and nothing more to do: still the content we wrote
+    h.record({ hash: ours, type: 'png', profile: profile() });
+    assert.strictEqual(h.isOwnOutput(ours), true);
+
+    // Past the cap, so the store is rewritten
+    h.record({ hash: ours, type: 'png', profile: profile() });
+    assert.strictEqual(new History(file).load().isOwnOutput(ours), true);
+});
+
+test('a saved result is remembered as written; one left alone is not', async () => {
+    const history = new History(storePath());
+    const saved = jobOn(history, { result: Buffer.concat([fs.readFileSync(makeFile('hdr2.png', 'png', 8)), Buffer.alloc(100)]) });
+    await saved.job.run({ ...DEFAULTS }, new AbortController().signal);
+    assert.strictEqual(history.isOwnOutput(await hashFile(saved.file)), true);
+
+    const untouched = jobOn(history);
+    await untouched.job.run({ ...DEFAULTS }, new AbortController().signal);
+    assert.strictEqual(history.isOwnOutput(await hashFile(untouched.file)), false);
+});
+
 test('forget clears the list and the file', () => {
     const file = storePath();
     const h = new History(file);

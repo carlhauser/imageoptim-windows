@@ -164,8 +164,9 @@ class Job extends EventEmitter {
     }
 
     // Records the file as it now is on disk as optimized with these settings.
-    // hash: the content's hash when already known. Never fails the job.
-    async remember(settings, level, hash = null) {
+    // hash: the content's hash when already known; written: this run saved
+    // that content over the original. Never fails the job.
+    async remember(settings, level, { hash = null, written = false } = {}) {
         if (!this.history) return;
         try {
             const stat = fs.statSync(this.filePath);
@@ -175,6 +176,7 @@ class Job extends EventEmitter {
                 key: statKey(this.filePath, stat),
                 type: this.type,
                 profile: profileFor(this.type, settings, { level }),
+                written,
             });
         } catch (err) {
             console.warn('Could not remember an optimized file:', err.message);
@@ -587,7 +589,7 @@ class Job extends EventEmitter {
         if (!this.bestPath) {
             // Nothing beat what is already on disk, which is therefore as
             // optimized as these settings make it - unless it changed meanwhile.
-            if (this.unchangedSinceStart()) await this.remember(settings, level, this.inputHash);
+            if (this.unchangedSinceStart()) await this.remember(settings, level, { hash: this.inputHash });
             this.setState('done');
             return;
         }
@@ -598,7 +600,7 @@ class Job extends EventEmitter {
             this.setState('error', `Optimized file could not be saved: ${err.message}`);
             return;
         }
-        await this.remember(settings, level);
+        await this.remember(settings, level, { written: true });
         this.setState('done');
     }
 
@@ -670,8 +672,11 @@ class Job extends EventEmitter {
 
         if (!this.backupPath) {
             // A file this app wrote itself has no original of its own to keep:
-            // that was kept, or not, when it was first optimized.
-            const ownOutput = Boolean(this.history && this.history.findByHash(this.inputHash));
+            // that was kept, or not, when it was first optimized. Only content
+            // it saved counts: a file merely remembered as already optimal is
+            // still the user's untouched original, and treating it as ours let
+            // a later lossy run overwrite it with no copy kept.
+            const ownOutput = Boolean(this.history && this.history.isOwnOutput(this.inputHash));
             if (settings.KeepOriginals && !ownOutput) {
                 // Throws if the copy can't be made, before anything is written
                 const kept = keepOriginal(this.filePath, { atime: this.atime, mtime: this.mtime });
